@@ -1,0 +1,66 @@
+
+\documentclass[border=8pt, multi, tikz]{standalone}
+\usepackage{import}
+\subimport{/home/grigoriy/graf-agent-main/external/PlotNeuralNet/layers/}{init}
+\usetikzlibrary{positioning}
+\usetikzlibrary{3d}
+
+\begin{document}
+\begin{tikzpicture}
+\tikzstyle{connection}=[ultra thick,every node/.style={sloped,allow upside down},draw=black!70,opacity=0.7]
+
+\node[anchor=west] at (-1, 3.2, 0) {\Large \bfseries Simple CNN};
+
+\pic[shift={(0,0,0)}] at (0,0,0)
+    {Box={
+        name=input,
+        caption={Input 224x224x3},
+        fill=green,
+        height=32,
+        width=1.2,
+        depth=32
+    }};
+\pic[shift={(2.2,0,0)}] at (input-east)
+    {Box={
+        name=conv1,
+        caption={Conv 64},
+        fill=yellow,
+        height=26,
+        width=2.2,
+        depth=26
+    }};
+\pic[shift={(2.2,0,0)}] at (conv1-east)
+    {Box={
+        name=pool1,
+        caption={MaxPool},
+        fill=red,
+        height=20,
+        width=1.0,
+        depth=20
+    }};
+\pic[shift={(2.2,0,0)}] at (pool1-east)
+    {Box={
+        name=fc1,
+        caption={FC 256},
+        fill=cyan,
+        height=16,
+        width=1.5,
+        depth=16
+    }};
+\pic[shift={(2.2,0,0)}] at (fc1-east)
+    {Box={
+        name=out,
+        caption={Classifier},
+        fill=magenta,
+        height=14,
+        width=1.2,
+        depth=14
+    }};
+
+\draw [connection] (input-east) -- node {\midarrow} (conv1-west);
+\draw [connection] (conv1-east) -- node {\midarrow} (pool1-west);
+\draw [connection] (pool1-east) -- node {\midarrow} (fc1-west);
+\draw [connection] (fc1-east) -- node {\midarrow} (out-west);
+
+\end{tikzpicture}
+\end{document}
