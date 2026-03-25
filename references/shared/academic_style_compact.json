@@ -1,0 +1,22 @@
+{
+"name": "academic_style_compact",
+"category": "shared",
+"goal": "compact_academic_diagrams",
+"rules": [
+"Use clean white background",
+"Keep labels short and clear",
+"Keep node sizes visually consistent within a group",
+"Show only meaningful arrows",
+"Prefer balanced compact layout",
+"Avoid very long horizontal or vertical compositions",
+"Keep the figure suitable for Word and papers",
+"Prefer readability over decoration"
+],
+"keywords": [
+"academic",
+"compact",
+"readable",
+"minimal",
+"word_friendly"
+]
+}

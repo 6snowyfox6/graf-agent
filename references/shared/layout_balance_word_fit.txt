@@ -1,0 +1,8 @@
+Layout balance rules:
+
+keep diagram close to rectangular overall shape
+distribute blocks into 2-4 aligned groups when possible
+avoid sparse empty zones
+avoid crossing arrows unless necessary
+major flow should be understandable at first glance
+final diagram should remain legible after scaling down for Word

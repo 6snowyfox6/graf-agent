@@ -1,0 +1,20 @@
+{
+"name": "layout_balance_word_fit",
+"category": "shared",
+"goal": "balanced_layout_for_documents",
+"rules": [
+"Keep the overall figure close to rectangular",
+"Distribute blocks into 2-4 aligned groups when possible",
+"Avoid large empty areas",
+"Avoid edge crossings unless necessary",
+"Make the main flow understandable at first glance",
+"Preserve legibility after downscaling for Word"
+],
+"keywords": [
+"layout",
+"balance",
+"word_fit",
+"compact",
+"rectangular"
+]
+}

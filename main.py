@@ -3,8 +3,9 @@ import base64
 import mimetypes
 import json
 from pathlib import Path
-
 import requests
+from pydantic import BaseModel
+from typing import Any
 
 # Point PATH to Graphviz bin directory, not dot.exe itself.
 os.environ["PATH"] += os.pathsep + r"C:\Program Files\Graphviz\bin"
@@ -15,6 +16,60 @@ BASE_URL = "http://127.0.0.1:1234/v1/chat/completions"
 GENERATOR_MODEL = "qwen3-8b"
 VISION_MODEL = "google_gemma-3-4b-it"
 CRITIC_MODEL = "google_gemma-3-4b-it"
+
+
+class GenerateRequest(BaseModel):
+    user_task: str
+    references: list[dict[str, Any]] = []
+
+
+def normalize_references(references: list[dict]) -> list[dict]:
+    normalized = []
+
+    for ref in references:
+        ref_type = ref.get("type", "text")
+        name = ref.get("name", "reference")
+        content = ref.get("content", "")
+
+        if ref_type == "json" and isinstance(content, dict):
+            content = json.dumps(content, ensure_ascii=False, indent=2)
+
+        normalized.append({
+            "type": ref_type,
+            "name": name,
+            "content": content
+        })
+
+    return normalized
+
+
+def format_references_for_prompt(references: list[dict]) -> str:
+    if not references:
+        return "Референсы не заданы."
+
+    parts = []
+
+    for i, ref in enumerate(references, start=1):
+        ref_type = ref["type"]
+        name = ref["name"]
+        content = ref["content"]
+
+        if ref_type == "text":
+            parts.append(
+                f"Референс {i} (text, {name}):\n{content}"
+            )
+
+        elif ref_type == "json":
+            parts.append(
+                f"Референс {i} (json, {name}):\n{content}"
+            )
+
+        elif ref_type == "image":
+            parts.append(
+                f"Референс {i} (image, {name}):\nФайл изображения: {content}"
+            )
+
+    return "\n\n".join(parts)
 
 
 def load_diagram_types(folder: str = "diagram_types") -> list:
@@ -494,6 +549,132 @@ def render_pipeline_diagram(diagram: dict, output_name: str = "diagram"):
     print(f"Схема сохранена: {output_name}.pdf")
 
 
+def load_references_for_mode(mode: str, base_folder: str = "references") -> list[dict]:
+    refs: list[dict] = []
+
+    base_path = Path(base_folder)
+    shared_path = base_path / "shared"
+    mode_path = base_path / mode
+
+    folders_to_scan = [shared_path, mode_path]
+
+    for folder in folders_to_scan:
+        if not folder.exists() or not folder.is_dir():
+            continue
+
+        for file in sorted(folder.iterdir()):
+            if not file.is_file():
+                continue
+
+            suffix = file.suffix.lower()
+
+            if suffix == ".txt":
+                content = file.read_text(encoding="utf-8").strip()
+                if content:
+                    refs.append({
+                        "type": "text",
+                        "name": file.stem,
+                        "content": content
+                    })
+
+            elif suffix == ".json":
+                try:
+                    raw = file.read_text(encoding="utf-8").strip()
+                    if not raw:
+                        continue
+
+                    content = json.loads(raw)
+                    refs.append({
+                        "type": "json",
+                        "name": file.stem,
+                        "content": content
+                    })
+                except json.JSONDecodeError:
+                    print(f"Пропускаю битый JSON-референс: {file}")
+
+    return refs
+
+
+def normalize_references(references: list[dict] | None) -> list[dict]:
+    normalized: list[dict] = []
+
+    for ref in references or []:
+        ref_type = ref.get("type", "text")
+        name = ref.get("name", "reference")
+        content = ref.get("content", "")
+
+        if ref_type == "json" and isinstance(content, dict):
+            content = json.dumps(content, ensure_ascii=False, indent=2)
+
+        elif ref_type == "text":
+            content = str(content)
+
+        else:
+            content = str(content)
+
+        normalized.append({
+            "type": ref_type,
+            "name": name,
+            "content": content
+        })
+
+    return normalized
+
+
+def merge_reference_sources(
+    mode: str,
+    reference_description: dict | str | None = None,
+    base_folder: str = "references"
+) -> list[dict]:
+    folder_refs = load_references_for_mode(mode, base_folder=base_folder)
+
+    direct_refs: list[dict] = []
+    if reference_description:
+        if isinstance(reference_description, dict):
+            direct_refs.append({
+                "type": "json",
+                "name": "direct_reference",
+                "content": reference_description
+            })
+        else:
+            direct_refs.append({
+                "type": "text",
+                "name": "direct_reference",
+                "content": str(reference_description)
+            })
+
+    return normalize_references(folder_refs + direct_refs)
+
+
+def format_references_for_prompt(references: list[dict]) -> str:
+    if not references:
+        return "Референсы не заданы."
+
+    parts: list[str] = []
+
+    for i, ref in enumerate(references, start=1):
+        ref_type = ref["type"]
+        name = ref["name"]
+        content = ref["content"]
+
+        if ref_type == "text":
+            parts.append(
+                f"Референс {i} (text, {name}):\n{content}"
+            )
+
+        elif ref_type == "json":
+            parts.append(
+                f"Референс {i} (json, {name}):\n{content}"
+            )
+
+        else:
+            parts.append(
+                f"Референс {i} ({ref_type}, {name}):\n{content}"
+            )
+
+    return "\n\n".join(parts)
+
+
 def render_diagram(diagram: dict, output_name: str = "diagram"):
     layout_hint = diagram.get("layout_hint", "")
     if layout_hint == "pipeline":
@@ -502,7 +683,10 @@ def render_diagram(diagram: dict, output_name: str = "diagram"):
         render_general_diagram(diagram, output_name)
 
 
-def critique_diagram(user_task: str, draft_json: dict) -> dict:
+def critique_diagram(user_task: str, draft_json: dict, references: list[dict] | None = None) -> dict:
+    references = normalize_references(references or [])
+    refs_text = format_references_for_prompt(references)
+
     system_prompt = (
         "Ты критик диаграмм. "
         "Проверяй не только логику и полноту, но и визуальное качество схемы. "
@@ -514,6 +698,9 @@ def critique_diagram(user_task: str, draft_json: dict) -> dict:
     )
 
     user_prompt = f"""
+Референсы:
+{refs_text}
+
 Запрос пользователя:
 {user_task}
 
@@ -675,18 +862,14 @@ def generate_diagram(user_task: str, reference_description: dict | str | None = 
     system_prompt = config["system_prompt"]
     layout_hint = config.get("layout_hint", "general")
     extra_rules = "\n".join(
-        f"- {rule}" for rule in config.get("extra_rules", []))
+        f"- {rule}" for rule in config.get("extra_rules", [])
+    )
 
-    if not reference_description:
-        reference_text = "Референс не задан."
-    elif isinstance(reference_description, dict):
-        reference_text = json.dumps(
-            reference_description, ensure_ascii=False, indent=2)
-    else:
-        reference_text = str(reference_description)
+    references = merge_reference_sources(mode, reference_description)
+    reference_text = format_references_for_prompt(references)
 
     user_prompt = f"""
-Референс:
+Референсы:
 {reference_text}
 
 Запрос пользователя:
@@ -694,6 +877,11 @@ def generate_diagram(user_task: str, reference_description: dict | str | None = 
 
 Дополнительные требования:
 {extra_rules}
+
+Используй референсы как ориентир по структуре, стилю и уровню детализации.
+Не копируй референсы буквально, если это не требуется.
+Если референсы задают стиль, переноси стиль.
+Если референсы задают структуру, переноси логику компоновки.
 
 Верни JSON строго такого вида:
 {{
@@ -784,22 +972,37 @@ def main():
 Сделай схему как общую архитектурную диаграмму системы.
 Верни результат в виде структуры диаграммы."""
 
-    image_path = "reference.png"
-    reference_description = {}
-    if Path(image_path).exists():
-        try:
-            reference_description = analyze_reference_image(image_path)
-            print("=== ОПИСАНИЕ РЕФЕРЕНСА ===")
-            print(json.dumps(reference_description, ensure_ascii=False, indent=2))
-        except Exception as e:
-            print(f"Не удалось проанализировать PNG-референс: {e}")
+    references = [
+        {
+            "type": "text",
+            "name": "academic style",
+            "content": "Минималистичная академичная схема, короткие подписи, компактная компоновка"
+        },
+        {
+            "type": "json",
+            "name": "sample architecture",
+            "content": {
+                "type": "flowchart",
+                "layout_hint": "general",
+                "nodes": [
+                    {"id": "a", "label": "Input"},
+                    {"id": "b", "label": "Processing"},
+                    {"id": "c", "label": "Output"}
+                ],
+                "edges": [
+                    {"source": "a", "target": "b", "label": ""},
+                    {"source": "b", "target": "c", "label": ""}
+                ]
+            }
+        }
+    ]
 
     print("=== ШАГ 1: Генерация черновика ===")
-    draft = generate_diagram(user_task, reference_description)
+    draft = generate_diagram(user_task, references)
     print(json.dumps(draft, ensure_ascii=False, indent=2))
 
     print("\n=== ШАГ 2: Критика ===")
-    critique = critique_diagram(user_task, draft)
+    critique = critique_diagram(user_task, draft, references)
     print(json.dumps(critique, ensure_ascii=False, indent=2))
 
     print("\n=== ШАГ 3: Исправление ===")

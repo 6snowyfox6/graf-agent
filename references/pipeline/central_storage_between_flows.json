@@ -1,0 +1,18 @@
+{
+"name": "central_storage_between_flows",
+"category": "pipeline",
+"goal": "shared_storage_anchor",
+"rules": [
+"Use one central storage block when several flows depend on the same data",
+"Route retrieval or exchange through that central block",
+"Do not duplicate the same storage in multiple places",
+"Keep arrows around storage simple",
+"Let storage anchor the composition without stretching it"
+],
+"keywords": [
+"central_storage",
+"shared_data",
+"anchor",
+"pipeline"
+]
+}

@@ -1,0 +1,9 @@
+Academic visual style for Graphviz diagrams:
+
+clean white background
+short labels, 1-3 words when possible
+consistent node sizes inside one group
+restrained arrow usage, only meaningful links
+balanced compact layout, avoid very long rows or tall columns
+suitable for Word insertion and scientific reports
+prioritize readability over decoration

@@ -1,0 +1,8 @@
+Storage placement rules:
+
+databases, vector stores, caches and files belong to the lower layer
+storage should support services, not dominate the figure
+if several storages exist, align them horizontally
+use short storage labels
+avoid many direct arrows from actors to storage
+show architecture hierarchy clearly

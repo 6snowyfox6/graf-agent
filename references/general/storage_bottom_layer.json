@@ -1,0 +1,20 @@
+{
+"name": "storage_bottom_layer",
+"category": "general",
+"goal": "clear_storage_layer",
+"rules": [
+"Place databases, vector stores, caches and files in the lower layer",
+"Let storage support services without dominating the figure",
+"Align multiple storages horizontally",
+"Use short storage labels",
+"Avoid many direct arrows from actors to storage",
+"Keep the architecture hierarchy clear"
+],
+"keywords": [
+"storage",
+"database",
+"cache",
+"lower_layer",
+"hierarchy"
+]
+}

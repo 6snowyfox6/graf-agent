@@ -1,0 +1,20 @@
+{
+"name": "input_feature_output_flow",
+"category": "model_architecture",
+"goal": "clear_intermediate_representations",
+"rules": [
+"Form a clear progression from input to feature maps to outputs",
+"Treat feature maps as intermediate representations",
+"Do not label every arrow",
+"Prefer fewer larger intermediate blocks over many tiny ones",
+"Preserve compact width and height",
+"Highlight transformation stages instead of low-level operations"
+],
+"keywords": [
+"input",
+"feature_maps",
+"output",
+"intermediate",
+"compact"
+]
+}

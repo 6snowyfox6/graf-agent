@@ -1,0 +1,8 @@
+Service grouping reference:
+
+related services should be placed side by side
+interfaces should sit near the services they expose
+shared infrastructure may be grouped separately
+use clusters only when they clarify structure
+prefer 3-6 main blocks over many tiny blocks
+keep dependencies visually calm and easy to follow

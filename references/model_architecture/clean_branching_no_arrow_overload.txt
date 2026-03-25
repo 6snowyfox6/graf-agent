@@ -1,0 +1,8 @@
+Branching and arrow rules for model diagrams:
+
+arrows should indicate direction, not carry long explanations
+branch only at semantically important points
+avoid tangled skip connections unless essential
+if multiple heads exist, align them in one row or column
+separate auxiliary outputs from main outputs
+keep the architecture visually disciplined

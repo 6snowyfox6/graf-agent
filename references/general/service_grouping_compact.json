@@ -1,0 +1,20 @@
+{
+"name": "service_grouping_compact",
+"category": "general",
+"goal": "compact_service_view",
+"rules": [
+"Place related services side by side",
+"Keep interfaces near the services they expose",
+"Group shared infrastructure separately when useful",
+"Use clusters only when they clarify structure",
+"Prefer 3-6 main blocks instead of many tiny blocks",
+"Keep dependencies calm and easy to follow"
+],
+"keywords": [
+"services",
+"grouping",
+"interfaces",
+"compact",
+"dependencies"
+]
+}

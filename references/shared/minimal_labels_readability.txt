@@ -1,0 +1,9 @@
+Labeling and readability rules:
+
+use nouns or short noun phrases
+avoid sentences inside nodes
+avoid repeated words across neighboring nodes
+one visual idea per block
+keep enough spacing for clear separation
+prefer simple grouping over excessive borders
+emphasize structure, not ornament

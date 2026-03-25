@@ -1,0 +1,20 @@
+{
+"name": "minimal_labels_readability",
+"category": "shared",
+"goal": "clear_labels_and_structure",
+"rules": [
+"Use nouns or short noun phrases",
+"Avoid full sentences inside nodes",
+"Avoid repeated words across nearby nodes",
+"Keep one visual idea per block",
+"Leave enough spacing for separation",
+"Prefer simple grouping over many borders",
+"Emphasize structure instead of ornament"
+],
+"keywords": [
+"labels",
+"readability",
+"minimalism",
+"clarity"
+]
+}

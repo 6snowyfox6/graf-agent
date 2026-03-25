@@ -1,0 +1,8 @@
+Feature-flow reference:
+
+input, feature maps, and outputs should form a clear progression
+feature maps act as intermediate representations
+do not label every arrow
+intermediate blocks should be fewer and larger rather than many tiny ones
+preserve a compact width and height
+highlight transformation stages, not low-level operations

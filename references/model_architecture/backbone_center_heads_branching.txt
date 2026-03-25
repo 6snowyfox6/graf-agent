@@ -1,0 +1,8 @@
+Model architecture layout:
+
+place backbone or encoder as the central block
+input should be clearly separated on one side
+output heads should branch from backbone on the other side
+keep head labels short
+use symmetric or near-symmetric branching when possible
+show main model structure before details

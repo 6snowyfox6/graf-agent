@@ -1,0 +1,20 @@
+{
+"name": "clean_branching_no_arrow_overload",
+"category": "model_architecture",
+"goal": "disciplined_model_graph",
+"rules": [
+"Use arrows mainly for direction, not long explanations",
+"Branch only at semantically important points",
+"Avoid tangled skip connections unless essential",
+"Align multiple heads in one row or column",
+"Separate auxiliary outputs from main outputs",
+"Keep the architecture visually disciplined"
+],
+"keywords": [
+"branching",
+"arrows",
+"heads",
+"outputs",
+"discipline"
+]
+}

@@ -1,0 +1,8 @@
+Pipeline layout:
+
+split distinct flows into separate lanes
+keep each lane short and dense
+avoid one extremely long left-to-right chain
+merge or connect lanes only at important points
+align comparable stages vertically or horizontally
+make the whole pipeline compact and easy to scan

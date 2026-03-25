@@ -1,0 +1,19 @@
+{
+"name": "document_query_dual_flow",
+"category": "pipeline",
+"goal": "document_and_query_flows",
+"rules": [
+"Represent document pipeline and query pipeline separately",
+"Document flow may include ingest, split, encode, store",
+"Query flow may include input, encode, retrieve, generate",
+"Place shared storage between or below both flows",
+"Show interaction points clearly",
+"Avoid overloading stages with implementation detail"
+],
+"keywords": [
+"document_pipeline",
+"query_pipeline",
+"shared_storage",
+"dual_flow"
+]
+}

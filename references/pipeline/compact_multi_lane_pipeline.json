@@ -1,0 +1,20 @@
+{
+"name": "compact_multi_lane_pipeline",
+"category": "pipeline",
+"goal": "dense_multi_flow_pipeline",
+"rules": [
+"Split distinct flows into separate lanes",
+"Keep each lane short and dense",
+"Avoid one extremely long left-to-right chain",
+"Merge or connect lanes only at important points",
+"Align comparable stages vertically or horizontally",
+"Keep the whole pipeline compact and easy to scan"
+],
+"keywords": [
+"pipeline",
+"lanes",
+"compact",
+"flow",
+"stages"
+]
+}

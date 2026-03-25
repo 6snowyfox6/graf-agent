@@ -1,0 +1,20 @@
+{
+"name": "backbone_center_heads_branching",
+"category": "model_architecture",
+"goal": "central_backbone_layout",
+"rules": [
+"Place backbone or encoder as the central block",
+"Separate input clearly on one side",
+"Branch output heads from the backbone on the other side",
+"Keep head labels short",
+"Prefer symmetric or near-symmetric branching",
+"Show main model structure before details"
+],
+"keywords": [
+"backbone",
+"encoder",
+"heads",
+"branching",
+"model"
+]
+}

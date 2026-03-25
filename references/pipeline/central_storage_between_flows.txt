@@ -1,0 +1,7 @@
+Central storage pattern:
+
+use one central storage block when multiple flows depend on the same data
+retrieval or exchange should happen through that central block
+do not duplicate the same storage in several places
+keep arrows around storage simple
+storage should anchor the composition, not stretch it

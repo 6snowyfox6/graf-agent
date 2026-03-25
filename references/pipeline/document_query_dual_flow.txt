@@ -1,0 +1,8 @@
+Dual-flow pipeline reference:
+
+represent document pipeline and query pipeline separately
+document flow may include ingest, split, encode, store
+query flow may include input, encode, retrieve, generate
+shared storage should sit between or below both flows
+show interaction points clearly
+avoid overloading stages with implementation detail
