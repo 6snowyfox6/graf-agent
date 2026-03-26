@@ -191,36 +191,49 @@ def get_diagram_config(mode: str, configs: list[dict]) -> dict:
 def get_node_level(node_id: str, label: str) -> int:
     text = f"{node_id} {label}".lower()
 
-    # 0 — внешние акторы / пользователи
+    # 0 — внешние акторы / роли / пользователи
     if any(x in text for x in [
-        "user", "student", "teacher", "operator", "admin",
-        "пользователь", "студент", "преподаватель", "оператор", "админ"
+        "user", "student", "teacher", "operator", "admin", "agronomist",
+        "пользователь", "студент", "преподаватель", "оператор", "админ",
+        "агроном", "клиент", "сотрудник", "менеджер"
     ]):
         return 0
 
-    # 1 — интерфейсы / входные точки
+    # 1 — интерфейсы / точки входа / клиентские приложения
     if any(x in text for x in [
-        "ui", "web", "frontend", "dashboard", "portal", "interface",
-        "веб", "интерфейс", "панель", "портал"
+        "ui", "web", "frontend", "dashboard", "portal", "interface", "app", "mobile",
+        "веб", "интерфейс", "панель", "портал", "приложение", "мобильное приложение",
+        "веб-панель", "web-panel", "web panel", "клиентское приложение"
     ]):
         return 1
 
-    # 2 — прикладные сервисы / бизнес-логика
+    # 2 — прикладные сервисы / бизнес-логика / управление
     if any(x in text for x in [
         "service", "auth", "course", "testing", "analytics", "notification",
         "analysis", "processing", "risk", "monitoring", "controller",
         "сервис", "аутенти", "курс", "тест", "аналит", "уведом", "обработ",
-        "анализ", "мониторинг", "контрол"
+        "анализ", "мониторинг", "контрол", "управление", "полив", "климат",
+        "модуль", "логика", "авторизац", "идентификац"
     ]):
         return 2
 
-    # 3 — базы / knowledge / storage
+    # 3 — данные / базы / правила / телеметрия / хранилища
     if any(x in text for x in [
         "database", "db", "storage", "repository", "knowledge", "graph",
         "vector db", "vector database", "база", "бд", "хранилище",
-        "репозитор", "граф", "knowledge graph"
+        "репозитор", "граф", "knowledge graph",
+        "телеметр", "правил", "материал", "materials", "profile", "profiles",
+        "данные", "data", "dataset", "метадан", "журнал", "лог"
     ]):
         return 3
+
+    # 1.5 — источники / устройства / сенсоры
+    # лучше ставить рядом с интерфейсно-входным слоем, а не в storage
+    if any(x in text for x in [
+        "sensor", "sensors", "device", "devices", "датчик", "датчики",
+        "камера", "дрон", "спутник", "оборудование", "устройство"
+    ]):
+        return 1
 
     # fallback для model architecture
     if "input" in text or "вход" in text:
@@ -690,6 +703,7 @@ def render_diagram(diagram: dict, output_name: str = "diagram"):
 
     return render_general_diagram(diagram, output_name)
 
+
 def critique_diagram(user_task: str, draft_json: dict, references: list[dict] | None = None) -> dict:
     references = normalize_references(references or [])
     refs_text = format_references_for_prompt(references)
@@ -930,7 +944,32 @@ def generate_diagram(user_task: str, reference_description: dict | str | None = 
 
 
 def main():
+<<<<<<< HEAD
     user_task = """Построй архитектуру гибридной CNN-Transformer модели для классификации изображений."""
+=======
+    user_task = """Нужно построить общую архитектурную диаграмму системы умной теплицы.
+
+Важно, чтобы это была именно архитектура системы, а не pipeline.
+
+В схеме должны быть:
+- агроном
+- оператор
+- веб-панель
+- мобильное приложение
+- сервис аутентификации
+- сервис мониторинга датчиков
+- сервис управления климатом
+- сервис управления поливом
+- сервис аналитики урожайности
+- база пользователей
+- база телеметрии
+- база агрономических правил
+- система уведомлений
+
+Еще нужно показать, что пользователи работают через веб-панель и мобильное приложение, сервисы используют базы данных, а уведомления отправляются пользователям.
+
+Сделай нормальную общую архитектурную схему, чтобы все выглядело как система из компонентов, а не как одна длинная цепочка блоков."""
+>>>>>>> 5bc8e0d (Improve general diagram layout and reference handling)
 
     references = [
         {

@@ -17,3 +17,6 @@ draft.json
 critique.json
 final.json
 dataset.jsonl
+external/PlotNeuralNet/
+*.rar
+outputs/
