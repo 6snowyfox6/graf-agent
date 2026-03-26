@@ -6,6 +6,7 @@ from pathlib import Path
 import requests
 from pydantic import BaseModel
 from typing import Any
+from plotneuralnet_renderer import PlotNeuralNetRenderer
 
 # Point PATH to Graphviz bin directory, not dot.exe itself.
 os.environ["PATH"] += os.pathsep + r"C:\Program Files\Graphviz\bin"
@@ -676,12 +677,17 @@ def format_references_for_prompt(references: list[dict]) -> str:
 
 
 def render_diagram(diagram: dict, output_name: str = "diagram"):
+    renderer = diagram.get("renderer", "")
     layout_hint = diagram.get("layout_hint", "")
-    if layout_hint == "pipeline":
-        render_pipeline_diagram(diagram, output_name)
-    else:
-        render_general_diagram(diagram, output_name)
 
+    if renderer == "plotneuralnet" or layout_hint == "model_architecture":
+        plot_renderer = PlotNeuralNetRenderer(project_root=".")
+        return plot_renderer.render(diagram, output_name=output_name)
+
+    if renderer == "pipeline" or layout_hint == "pipeline":
+        return render_pipeline_diagram(diagram, output_name)
+
+    return render_general_diagram(diagram, output_name)
 
 def critique_diagram(user_task: str, draft_json: dict, references: list[dict] | None = None) -> dict:
     references = normalize_references(references or [])
@@ -878,43 +884,24 @@ def generate_diagram(user_task: str, reference_description: dict | str | None = 
 Дополнительные требования:
 {extra_rules}
 
-Используй референсы как ориентир по структуре, стилю и уровню детализации.
-Не копируй референсы буквально, если это не требуется.
-Если референсы задают стиль, переноси стиль.
-Если референсы задают структуру, переноси логику компоновки.
+Верни только валидный JSON без markdown и пояснений.
 
-Верни JSON строго такого вида:
+Формат:
 {{
-  "type": "flowchart",
   "title": "string",
   "layout_hint": "{layout_hint}",
-  "style": {{
-    "direction": "TB",
-    "theme": "clean"
-  }},
-  "lanes": [
-    {{
-      "name": "string",
-      "nodes": ["string"]
-    }}
-  ],
+  "renderer": "{config.get('renderer', 'general')}",
   "nodes": [
     {{
       "id": "string",
       "label": "string",
-      "shape": "string",
-      "fillcolor": "string",
-      "color": "string",
-      "style": "string"
+      "kind": "input|conv|pool|block|fc|output"
     }}
   ],
   "edges": [
     {{
       "source": "string",
-      "target": "string",
-      "label": "string",
-      "color": "string",
-      "style": "string"
+      "target": "string"
     }}
   ]
 }}
