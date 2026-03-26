@@ -8,13 +8,14 @@ from pydantic import BaseModel
 from typing import Any
 from plotneuralnet_renderer import PlotNeuralNetRenderer
 
+
 # Point PATH to Graphviz bin directory, not dot.exe itself.
 os.environ["PATH"] += os.pathsep + r"C:\Program Files\Graphviz\bin"
 os.environ["PATH"] += os.pathsep + r"C:\Program Files (x86)\Graphviz\bin"
 
-BASE_URL = "http://127.0.0.1:1234/v1/chat/completions"
+BASE_URL = "http://192.168.0.130:1234/v1/chat/completions"
 
-GENERATOR_MODEL = "qwen3-8b"
+GENERATOR_MODEL = "qwen/qwen3-8b"
 VISION_MODEL = "google_gemma-3-4b-it"
 CRITIC_MODEL = "google_gemma-3-4b-it"
 
@@ -929,35 +930,7 @@ def generate_diagram(user_task: str, reference_description: dict | str | None = 
 
 
 def main():
-    user_task = """Построй общую архитектурную диаграмму цифровой образовательной платформы.
-
-Нужна универсальная архитектурная схема, а не pipeline и не архитектура нейросети.
-Схема должна быть визуально чистой, компактной и подходящей для вставки в документ.
-Используй короткие и понятные подписи узлов.
-Не перегружай схему лишними деталями.
-Для обычных переходов label должен быть пустой строкой.
-
-Платформа включает:
-1. Студент
-2. Преподаватель
-3. Веб-интерфейс
-4. Сервис аутентификации
-5. Сервис курсов
-6. Сервис тестирования
-7. Сервис аналитики
-8. Базу данных пользователей
-9. Базу данных учебных материалов
-10. Сервис уведомлений
-
-Дополнительно нужно отразить:
-- студент и преподаватель взаимодействуют через веб-интерфейс
-- веб-интерфейс использует сервис аутентификации
-- сервис курсов и сервис тестирования работают с учебными материалами
-- сервис аналитики собирает данные об активности
-- сервис уведомлений отправляет сообщения пользователям
-
-Сделай схему как общую архитектурную диаграмму системы.
-Верни результат в виде структуры диаграммы."""
+    user_task = """Построй архитектуру гибридной CNN-Transformer модели для классификации изображений."""
 
     references = [
         {

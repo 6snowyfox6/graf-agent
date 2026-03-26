@@ -161,7 +161,11 @@ class PlotNeuralNetRenderer:
 
     def _map_node(self, node: dict[str, Any], index: int) -> dict[str, Any]:
         node_id = self._sanitize_id(str(node.get("id", f"layer_{index}")))
-        label = str(node.get("label", f"Layer {index}"))
+
+        raw_label = node.get("label", f"Layer {index}")
+        label = self._normalize_label(raw_label)
+        label = self._shorten_label(label, max_words=3, max_chars=26)
+
         kind = str(node.get("kind", "")).strip().lower()
 
         if not kind:
@@ -178,41 +182,84 @@ class PlotNeuralNetRenderer:
         }
 
         if kind == "input":
-            block.update(width=1.2, height=32, depth=32, fill="green")
+            block.update(width=2.0, height=32, depth=32, fill="green")
         elif kind == "conv":
-            block.update(width=2.2, height=26, depth=26, fill="yellow")
+            block.update(width=3.4, height=26, depth=26, fill="yellow")
         elif kind == "pool":
-            block.update(width=1.0, height=20, depth=20, fill="red")
+            block.update(width=1.8, height=20, depth=20, fill="red")
         elif kind == "block":
-            block.update(width=2.8, height=24, depth=24, fill="blue")
+            block.update(width=3.8, height=24, depth=24, fill="blue")
         elif kind == "fc":
-            block.update(width=1.5, height=16, depth=16, fill="cyan")
+            block.update(width=2.6, height=16, depth=16, fill="cyan")
         elif kind == "output":
-            block.update(width=1.2, height=14, depth=14, fill="magenta")
+            block.update(width=2.0, height=14, depth=14, fill="magenta")
 
         for key in ("width", "height", "depth", "fill"):
             if key in node:
                 block[key] = node[key]
 
         return block
+    def _shorten_label(self, label: str | None, max_words: int = 3, max_chars: int = 26) -> str:
+        if label is None:
+            return "Block"
 
+        label = str(label).strip()
+        if not label:
+            return "Block"
+
+        protected = {
+            "Input",
+            "Conv Stem",
+            "CNN Blocks",
+            "Transformer Blocks",
+            "Fusion",
+            "Cls Head",
+            "Output",
+            "FC"
+        }
+
+        if label in protected:
+            return label
+
+        if len(label) <= max_chars:
+            return label
+
+        words = label.split()
+        if len(words) <= max_words:
+            return label
+
+        return " ".join(words[:max_words])
     def _infer_kind_from_label(self, label: str) -> str:
         text = label.lower()
 
-        if any(x in text for x in ("input", "вход", "image", "img")):
+        if any(x in text for x in ("input", "вход", "image", "img", "tokens")):
             return "input"
-        if "pool" in text:
+
+        if any(x in text for x in ("pool", "avgpool", "maxpool", "global pool")):
             return "pool"
-        if any(x in text for x in ("fc", "linear", "dense")):
+
+        if any(x in text for x in ("fc", "linear", "dense", "mlp", "projection")):
             return "fc"
-        if any(x in text for x in ("output", "softmax", "classifier", "class", "выход")):
+
+        if any(x in text for x in (
+            "output", "softmax", "classifier", "class", "выход",
+            "segmentation", "mask", "detection", "boxes", "logits"
+        )):
             return "output"
-        if any(
-            x in text
-            for x in ("encoder", "decoder", "transformer", "bottleneck", "block", "backbone", "head")
-        ):
+
+        if any(x in text for x in (
+            "encoder", "decoder", "transformer", "bottleneck", "block",
+            "backbone", "neck", "head", "stage", "attention",
+            "residual", "resblock", "unet", "fusion", "generator", "discriminator"
+        )):
             return "block"
-        return "conv"
+
+        if any(x in text for x in (
+            "conv", "stem", "patch embedding", "embedding"
+        )):
+            return "conv"
+
+        return "block"
 
     def _topological_fallback_order(
         self,
@@ -253,15 +300,43 @@ class PlotNeuralNetRenderer:
             return ordered
 
         return nodes
+    def _normalize_label(self, label: str | None) -> str:
+        if label is None:
+            return "Block"
 
+        text = str(label).strip()
+        if not text:
+            return "Block"
+
+        replacements = {
+            "Input Layer": "Input",
+            "Initial Convolutional Layers": "Conv Stem",
+            "Initial Conv Layers": "Conv Stem",
+            "Initial Convolution": "Conv Stem",
+            "Stem": "Conv Stem",
+            "Stacked CNN": "CNN Blocks",
+            "CNN Layers": "CNN Blocks",
+            "Conv Layers": "CNN Blocks",
+            "Transformer Encoder": "Transformer Blocks",
+            "Transformer Encoder Blocks": "Transformer Blocks",
+            "Transformer Layers": "Transformer Blocks",
+            "Feature Fusion": "Fusion",
+            "Feature Fusion Module": "Fusion",
+            "Feature Fusion Layer": "Fusion",
+            "Classification Head": "Cls Head",
+            "Classifier Head": "Cls Head",
+            "Output Layer": "Output",
+            "Output (Softmax)": "Output"
+        }
+
+        return replacements.get(text, text)
     def _build_node_tex(self, node: dict[str, Any], index: int, placed_ids: list[str]) -> str:
         name = node["id"]
         caption = self._escape_latex(node["label"])
         fill = node["fill"]
         width = node["width"]
         height = node["height"]
-        depth = node["depth"]
-
+        depth = node["depth"]    
         if index == 0:
             return f"""
 \\pic[shift={{(0,0,0)}}] at (0,0,0)

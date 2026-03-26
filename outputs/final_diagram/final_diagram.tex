@@ -9,78 +9,80 @@
 \begin{tikzpicture}
 \tikzstyle{connection}=[ultra thick,every node/.style={sloped,allow upside down},draw=black!70,opacity=0.7]
 
-\node[anchor=west] at (-1, 3.2, 0) {\Large \bfseries Simple CNN};
+\node[anchor=west] at (-1, 3.2, 0) {\Large \bfseries Hybrid CNN-Transformer Image Classifier};
 
 \pic[shift={(0,0,0)}] at (0,0,0)
     {Box={
         name=input,
-        caption={Input 224x224x3},
+        caption={Input},
         fill=green,
         height=32,
-        width=1.2,
+        width=2.0,
         depth=32
     }};
 \pic[shift={(2.2,0,0)}] at (input-east)
     {Box={
-        name=conv1,
-        caption={Conv 64},
+        name=stem,
+        caption={Conv Stem},
         fill=yellow,
         height=26,
-        width=2.2,
+        width=3.4,
         depth=26
     }};
-\pic[shift={(2.2,0,0)}] at (conv1-east)
+\pic[shift={(2.2,0,0)}] at (stem-east)
     {Box={
-        name=pool1,
-        caption={MaxPool},
-        fill=red,
-        height=20,
-        width=1.0,
-        depth=20
+        name=cnn_layers,
+        caption={CNN Blocks},
+        fill=blue,
+        height=24,
+        width=3.8,
+        depth=24
     }};
-\pic[shift={(2.2,0,0)}] at (pool1-east)
+\pic[shift={(2.2,0,0)}] at (cnn_layers-east)
     {Box={
-        name=conv2,
-        caption={Conv 128},
-        fill=yellow,
-        height=26,
-        width=2.2,
-        depth=26
+        name=transformer,
+        caption={Transformer},
+        fill=blue,
+        height=24,
+        width=3.8,
+        depth=24
     }};
-\pic[shift={(2.2,0,0)}] at (conv2-east)
+\pic[shift={(2.2,0,0)}] at (transformer-east)
     {Box={
-        name=pool2,
-        caption={MaxPool},
-        fill=red,
-        height=20,
-        width=1.0,
-        depth=20
+        name=fusion,
+        caption={Fusion},
+        fill=blue,
+        height=24,
+        width=3.8,
+        depth=24
     }};
-\pic[shift={(2.2,0,0)}] at (pool2-east)
+\pic[shift={(2.2,0,0)}] at (fusion-east)
     {Box={
-        name=fc1,
-        caption={FC 256},
+        name=cls_head,
+        caption={Cls Head},
         fill=cyan,
         height=16,
-        width=1.5,
+        width=2.6,
         depth=16
     }};
-\pic[shift={(2.2,0,0)}] at (fc1-east)
+\pic[shift={(2.2,0,0)}] at (cls_head-east)
     {Box={
-        name=out,
-        caption={Classifier},
+        name=output,
+        caption={Output},
         fill=magenta,
         height=14,
-        width=1.2,
+        width=2.0,
         depth=14
     }};
 
-\draw [connection] (input-east) -- node {\midarrow} (conv1-west);
-\draw [connection] (conv1-east) -- node {\midarrow} (pool1-west);
-\draw [connection] (pool1-east) -- node {\midarrow} (conv2-west);
-\draw [connection] (conv2-east) -- node {\midarrow} (pool2-west);
-\draw [connection] (pool2-east) -- node {\midarrow} (fc1-west);
-\draw [connection] (fc1-east) -- node {\midarrow} (out-west);
+\draw [connection] (input-east) -- node {\midarrow} (stem-west);
+\draw [connection] (stem-east) -- node {\midarrow} (cnn_layers-west);
+\draw [connection] (cnn_layers-east) -- node {\midarrow} (transformer-west);
+\draw [connection] (transformer-east) -- node {\midarrow} (fusion-west);
+\draw [connection] (fusion-east) -- node {\midarrow} (cls_head-west);
+\draw [connection] (cls_head-east) -- node {\midarrow} (output-west);
+\draw [connection] (cnn_layers-east) -- node {\midarrow} (transformer-west);
+\draw [connection] (stem-east) -- node {\midarrow} (cnn_layers-west);
 
 \end{tikzpicture}
 \end{document}
