@@ -124,6 +124,10 @@ if not DIAGRAM_CONFIGS:
     ]
 
 
+def chunk_nodes(items: list, chunk_size: int) -> list[list]:
+    return [items[i:i + chunk_size] for i in range(0, len(items), chunk_size)]
+
+
 def ask_llm(model: str, system_prompt: str, user_prompt: str, timeout: tuple[int, int] = (30, 300)) -> str:
     payload = {
         "model": model,
@@ -193,45 +197,42 @@ def get_node_level(node_id: str, label: str) -> int:
 
     # 0 — внешние акторы / роли / пользователи
     if any(x in text for x in [
-        "user", "student", "teacher", "operator", "admin", "agronomist",
-        "пользователь", "студент", "преподаватель", "оператор", "админ",
-        "агроном", "клиент", "сотрудник", "менеджер"
+        "student", "teacher", "operator", "admin", "agronomist",
+        "студент", "преподавател", "оператор", "администратор", "агроном"
     ]):
         return 0
 
-    # 1 — интерфейсы / точки входа / клиентские приложения
+    # 1 — интерфейсы / клиентские приложения
     if any(x in text for x in [
         "ui", "web", "frontend", "dashboard", "portal", "interface", "app", "mobile",
         "веб", "интерфейс", "панель", "портал", "приложение", "мобильное приложение",
-        "веб-панель", "web-panel", "web panel", "клиентское приложение"
+        "веб-портал", "web portal"
     ]):
         return 1
 
-    # 2 — прикладные сервисы / бизнес-логика / управление
+    # 2 — сервисы / бизнес-логика
     if any(x in text for x in [
         "service", "auth", "course", "testing", "analytics", "notification",
-        "analysis", "processing", "risk", "monitoring", "controller",
-        "сервис", "аутенти", "курс", "тест", "аналит", "уведом", "обработ",
-        "анализ", "мониторинг", "контрол", "управление", "полив", "климат",
-        "модуль", "логика", "авторизац", "идентификац"
+        "analysis", "processing", "monitoring", "controller",
+        "сервис", "аутенти", "курс", "тест", "аналит", "уведом",
+        "анализ", "мониторинг", "контрол", "управление"
     ]):
         return 2
 
-    # 3 — данные / базы / правила / телеметрия / хранилища
+    # 3 — storage / данные / результаты / правила / материалы
     if any(x in text for x in [
         "database", "db", "storage", "repository", "knowledge", "graph",
         "vector db", "vector database", "база", "бд", "хранилище",
         "репозитор", "граф", "knowledge graph",
-        "телеметр", "правил", "материал", "materials", "profile", "profiles",
-        "данные", "data", "dataset", "метадан", "журнал", "лог"
+        "телеметр", "правил", "материал", "materials",
+        "результат", "results", "dataset", "данные", "data",
+        "пользовател", "user db", "material db", "result db"
     ]):
         return 3
 
-    # 1.5 — источники / устройства / сенсоры
-    # лучше ставить рядом с интерфейсно-входным слоем, а не в storage
+    # сенсоры / устройства — ближе к входным источникам
     if any(x in text for x in [
-        "sensor", "sensors", "device", "devices", "датчик", "датчики",
-        "камера", "дрон", "спутник", "оборудование", "устройство"
+        "sensor", "device", "датчик", "датчики", "камера", "дрон", "спутник"
     ]):
         return 1
 
@@ -244,7 +245,7 @@ def get_node_level(node_id: str, label: str) -> int:
         return 2
     if "head" in text or "classifier" in text or "detector" in text:
         return 2
-    if "output" in text or "результат" in text or "выход" in text:
+    if "output" in text or "выход" in text:
         return 3
 
     return 2
@@ -328,6 +329,24 @@ def auto_style_node(node: dict) -> dict:
     return styled
 
 
+def normalize_node_style(node: dict) -> dict:
+    node = node.copy()
+
+    shape = str(node.get("shape", "box")).lower().strip()
+    style = str(node.get("style", "filled,rounded")).strip()
+
+    if shape in {"roundedrectangle", "rounded_rect", "rounded-box", "rectangle", "rect"}:
+        node["shape"] = "box"
+        if "rounded" not in style:
+            style = f"{style},rounded" if style else "rounded"
+        node["style"] = style
+    else:
+        node["shape"] = shape if shape else "box"
+        node["style"] = style if style else "filled,rounded"
+
+    return node
+
+
 def render_general_diagram(diagram: dict, output_name: str = "diagram"):
     from graphviz import Digraph
 
@@ -336,8 +355,8 @@ def render_general_diagram(diagram: dict, output_name: str = "diagram"):
         rankdir="TB",
         splines="spline",
         overlap="false",
-        nodesep="0.35",
-        ranksep="0.5",
+        nodesep="0.28",
+        ranksep="0.42",
         bgcolor="white"
     )
 
@@ -348,8 +367,8 @@ def render_general_diagram(diagram: dict, output_name: str = "diagram"):
         fillcolor="#d9e8fb",
         color="#4a6fa5",
         fontname="Arial",
-        fontsize="13",
-        margin="0.12,0.08",
+        fontsize="12",
+        margin="0.10,0.06"
     )
 
     dot.attr(
@@ -357,30 +376,40 @@ def render_general_diagram(diagram: dict, output_name: str = "diagram"):
         color="#555555",
         fontname="Arial",
         fontsize="10",
-        arrowsize="0.7",
+        arrowsize="0.7"
     )
 
     styled_nodes = [auto_style_node(node) for node in diagram.get("nodes", [])]
 
-    level_groups: dict[int, list[dict]] = {}
+    level_groups = {}
     for node in styled_nodes:
         level = get_node_level(node["id"], node["label"])
         level_groups.setdefault(level, []).append(node)
 
-    for level in sorted(level_groups.keys()):
-        with dot.subgraph() as s:
-            s.attr(rank="same")
-            for node in level_groups[level]:
-                s.node(
-                    node["id"],
-                    node["label"],
-                    shape=node.get("shape", "box"),
-                    style=node.get("style", "filled,rounded"),
-                    fillcolor=node.get("fillcolor", "#d9e8fb"),
-                    color=node.get("color", "#4a6fa5"),
-                )
+    # Разбиваем слишком длинные уровни на компактные подряды
+    # чтобы схема не была слишком широкой
+    max_per_row = 3
 
-    layout_hint = diagram.get("layout_hint", "")
+    sorted_levels = sorted(level_groups.keys())
+    for level in sorted_levels:
+        rows = chunk_nodes(level_groups[level], max_per_row)
+
+        for row_index, row_nodes in enumerate(rows):
+            with dot.subgraph() as s:
+                s.attr(rank="same")
+                for node in row_nodes:
+                    node = normalize_node_style(node)
+                    s.node(
+                        node["id"],
+                        node["label"],
+                        shape=node.get("shape", "box"),
+                        style=node.get("style", "filled,rounded"),
+                        fillcolor=node.get("fillcolor", "#d9e8fb"),
+                        color=node.get("color", "#4a6fa5")
+                    )
+
+    layout_hint = diagram.get("layout_hint", "general")
+
     for edge in diagram.get("edges", []):
         raw_label = edge.get("label", "")
         label = raw_label.strip() if isinstance(raw_label, str) else ""
@@ -388,34 +417,17 @@ def render_general_diagram(diagram: dict, output_name: str = "diagram"):
         if label in {"→", "->", "-->", "=>", ""}:
             label = ""
 
-        if layout_hint == "model_architecture":
-            keep_labels = {"yes", "no", "да", "нет"}
-            if label.lower() not in keep_labels:
-                label = ""
-
         if len(label) > 18:
             label = ""
 
         edge_kwargs = {
             "color": edge.get("color", "#555555"),
             "style": edge.get("style", "solid"),
-            "penwidth": "1.2",
+            "penwidth": "1.1"
         }
 
-        edge_text = f"{edge.get('source', '')} {edge.get('target', '')} {label}".lower(
-        )
-        is_feedback = (
-            "обрат" in edge_text
-            or "feedback" in edge_text
-            or edge.get("style") == "dashed"
-        )
-
-        if is_feedback:
-            edge_kwargs["style"] = "dashed"
-            edge_kwargs["color"] = "#999999"
-            edge_kwargs["constraint"] = "false"
-            edge_kwargs["penwidth"] = "1.0"
-            edge_kwargs["arrowhead"] = "normal"
+        if layout_hint == "general":
+            # Для general-схем стараемся не плодить лишние подписи на стрелках
             label = ""
 
         if label:
@@ -944,33 +956,53 @@ def generate_diagram(user_task: str, reference_description: dict | str | None = 
 
 
 def main():
-<<<<<<< HEAD
-    user_task = """Построй архитектуру гибридной CNN-Transformer модели для классификации изображений."""
-=======
-    user_task = """Нужно построить общую архитектурную диаграмму системы умной теплицы.
 
-Важно, чтобы это была именно архитектура системы, а не pipeline.
+    user_task = """Построй общую архитектурную диаграмму образовательной платформы.
 
-В схеме должны быть:
-- агроном
-- оператор
-- веб-панель
-- мобильное приложение
-- сервис аутентификации
-- сервис мониторинга датчиков
-- сервис управления климатом
-- сервис управления поливом
-- сервис аналитики урожайности
-- база пользователей
-- база телеметрии
-- база агрономических правил
-- система уведомлений
+В системе есть внешние акторы:
+- Student
+- Teacher
+- Admin
 
-Еще нужно показать, что пользователи работают через веб-панель и мобильное приложение, сервисы используют базы данных, а уведомления отправляются пользователям.
+Пользовательские интерфейсы:
+- Web Portal
+- Mobile App
 
-Сделай нормальную общую архитектурную схему, чтобы все выглядело как система из компонентов, а не как одна длинная цепочка блоков."""
->>>>>>> 5bc8e0d (Improve general diagram layout and reference handling)
+Внутренние сервисы:
+- Auth Service
+- Course Management
+- Test Service
+- Notification
+- Analytics
 
+Хранилища данных:
+- User DB
+- Material DB
+- Result DB
+
+Логика системы:
+- Student работает через Web Portal и Mobile App
+- Teacher в основном работает через Web Portal
+- Admin работает через Web Portal
+- Web Portal взаимодействует с Auth Service, Course Management, Test Service
+- Mobile App взаимодействует с Auth Service, Course Management, Notification
+- Test Service сохраняет данные в Result DB
+- Course Management работает с Material DB
+- Auth Service работает с User DB
+- Analytics получает данные из Result DB и User DB
+- Notification используется как внутренний сервис оповещений
+
+Требования к схеме:
+- это именно general architecture diagram, а не pipeline
+- акторы должны быть сверху
+- интерфейсы должны быть отдельным слоем под акторами
+- сервисы должны быть в центральном слое как параллельные модули
+- базы данных должны быть внизу
+- не нужно показывать все возможные связи
+- избегай длинных диагональных стрелок
+- избегай перегруженного верхнего слоя
+- Notification не должен выглядеть как внешний узел
+- схема должна быть компактной и удобной для вставки в документ"""
     references = [
         {
             "type": "text",
