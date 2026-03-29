@@ -2,12 +2,14 @@ import os
 import base64
 import mimetypes
 import json
+import re
 from pathlib import Path
 import requests
 from pydantic import BaseModel
 from typing import Any
 from plotneuralnet_renderer import PlotNeuralNetRenderer
 from infographic_renderer import InfographicRenderer
+from graphviz import Digraph
 
 
 # Point PATH to Graphviz bin directory, not dot.exe itself.
@@ -44,6 +46,104 @@ def normalize_references(references: list[dict]) -> list[dict]:
         })
 
     return normalized
+
+
+FORBIDDEN_VISIBLE_TOKENS = {
+    "input", "output", "block", "conv", "ui", "api", "db", "service"
+}
+
+
+def clean_visible_label(label: str) -> str:
+    s = str(label or "").strip()
+
+    replacements = [
+        (r"\bweb\s*ui\b", "Веб-интерфейс"),
+        (r"\bui\b", "Интерфейс"),
+        (r"\bapi\b", "Программный интерфейс"),
+        (r"\bdb\b", "База данных"),
+        (r"\bservice\b", "Сервис"),
+        (r"\bblock\b", ""),
+        (r"\bconv\b", ""),
+        (r"\binput\b", ""),
+        (r"\boutput\b", ""),
+    ]
+
+    for pattern, repl in replacements:
+        s = re.sub(pattern, repl, s, flags=re.IGNORECASE)
+
+    s = re.sub(
+        r"\((input|output|block|conv|ui|api|db|service)\)",
+        "",
+        s,
+        flags=re.IGNORECASE
+    )
+    s = re.sub(r"\s+", " ", s).strip(" ,;:()[]-")
+
+    # Частые англо-русские замены
+    s = s.replace("Telemetry", "Телеметрия")
+    s = s.replace("Analytics", "Аналитика")
+    s = s.replace("Notification", "Уведомления")
+    s = s.replace("Processing", "Обработка")
+    s = s.replace("Moderator", "Модератор")
+    s = s.replace("User", "Пользователь")
+    s = s.replace("Material", "Материалы")
+
+    if not s:
+        s = "Компонент"
+
+    return s
+
+
+def infer_general_kind_from_label(label: str) -> str:
+    t = str(label or "").lower()
+
+    if any(x in t for x in [
+        "пользователь", "модератор", "администратор", "оператор",
+        "студент", "преподаватель", "клиент"
+    ]):
+        return "input"
+
+    if any(x in t for x in [
+        "интерфейс", "веб", "панель", "портал",
+        "приложение", "дашборд", "программный интерфейс"
+    ]):
+        return "conv"
+
+    if any(x in t for x in [
+        "база", "хранилище", "телеметр", "лог",
+        "материал", "данн", "результат", "профил"
+    ]):
+        return "output"
+
+    return "block"
+
+
+def dedupe_edges(edges: list[dict]) -> list[dict]:
+    seen = set()
+    result = []
+
+    for edge in edges or []:
+        source = edge.get("source")
+        target = edge.get("target")
+
+        if not source or not target or source == target:
+            continue
+
+        key = (source, target)
+        if key in seen:
+            continue
+
+        seen.add(key)
+        new_edge = edge.copy()
+        label = str(new_edge.get("label", "")).strip()
+
+        if label in {"→", "->", "-->", "=>"}:
+            label = ""
+
+        new_edge["label"] = label
+        result.append(new_edge)
+
+    return result
 
 
 def format_references_for_prompt(references: list[dict]) -> str:
@@ -131,14 +231,20 @@ def chunk_nodes(items: list, chunk_size: int) -> list[list]:
     return [items[i:i + chunk_size] for i in range(0, len(items), chunk_size)]
 
 
-def ask_llm(model: str, system_prompt: str, user_prompt: str, timeout: tuple[int, int] = (30, 300)) -> str:
+def ask_llm(
+    model: str,
+    system_prompt: str,
+    user_prompt: str,
+    timeout: tuple[int, int] = (30, 300),
+    temperature: float = 0.15
+) -> str:
     payload = {
         "model": model,
         "messages": [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt},
         ],
-        "temperature": 0.2,
+        "temperature": temperature,
     }
 
     response = requests.post(BASE_URL, json=payload, timeout=timeout)
@@ -209,60 +315,29 @@ def get_diagram_config(mode: str, configs: list[dict]) -> dict:
     raise ValueError(f"Не найден конфиг для режима: {mode}")
 
 
-def get_node_level(node_id: str, label: str) -> int:
+def get_node_level(node_id: str, label: str, kind: str | None = None) -> int:
+    kind = str(kind or "").lower().strip()
     text = f"{node_id} {label}".lower()
 
-    # 0 — внешние акторы / роли / пользователи
-    if any(x in text for x in [
-        "student", "teacher", "operator", "admin", "agronomist",
-        "студент", "преподавател", "оператор", "администратор", "агроном"
-    ]):
+    if kind == "input":
+        if any(x in text for x in ["интерфейс", "веб", "панель", "портал", "api", "ui"]):
+            return 1
         return 0
 
-    # 1 — интерфейсы / клиентские приложения
-    if any(x in text for x in [
-        "ui", "web", "frontend", "dashboard", "portal", "interface", "app", "mobile",
-        "веб", "интерфейс", "панель", "портал", "приложение", "мобильное приложение",
-        "веб-портал", "web portal"
-    ]):
+    if kind == "conv":
         return 1
 
-    # 2 — сервисы / бизнес-логика
-    if any(x in text for x in [
-        "service", "auth", "course", "testing", "analytics", "notification",
-        "analysis", "processing", "monitoring", "controller",
-        "сервис", "аутенти", "курс", "тест", "аналит", "уведом",
-        "анализ", "мониторинг", "контрол", "управление"
-    ]):
+    if kind == "block":
         return 2
 
-    # 3 — storage / данные / результаты / правила / материалы
-    if any(x in text for x in [
-        "database", "db", "storage", "repository", "knowledge", "graph",
-        "vector db", "vector database", "база", "бд", "хранилище",
-        "репозитор", "граф", "knowledge graph",
-        "телеметр", "правил", "материал", "materials",
-        "результат", "results", "dataset", "данные", "data",
-        "пользовател", "user db", "material db", "result db"
-    ]):
+    if kind == "output":
         return 3
 
-    # сенсоры / устройства — ближе к входным источникам
-    if any(x in text for x in [
-        "sensor", "device", "датчик", "датчики", "камера", "дрон", "спутник"
-    ]):
-        return 1
-
-    # fallback для model architecture
-    if "input" in text or "вход" in text:
+    if any(x in text for x in ["пользователь", "модератор", "администратор", "оператор"]):
         return 0
-    if "backbone" in text or "encoder" in text or "decoder" in text or "block" in text:
-        return 2
-    if "feature" in text or "embedding" in text or "map" in text:
-        return 2
-    if "head" in text or "classifier" in text or "detector" in text:
-        return 2
-    if "output" in text or "выход" in text:
+    if any(x in text for x in ["интерфейс", "веб", "панель", "портал", "api", "ui"]):
+        return 1
+    if any(x in text for x in ["база", "хранилище", "телеметр", "лог", "данн"]):
         return 3
 
     return 2
@@ -364,101 +439,283 @@ def normalize_node_style(node: dict) -> dict:
     return node
 
 
-def render_general_diagram(diagram: dict, output_name: str = "diagram"):
-    from graphviz import Digraph
+def score_general_candidate(diagram: dict) -> int:
+    score = 100
 
-    dot = Digraph(comment=diagram.get("title", "Diagram"))
-    dot.attr(
-        rankdir="TB",
-        splines="spline",
-        overlap="false",
-        nodesep="0.28",
-        ranksep="0.42",
-        bgcolor="white"
-    )
+    nodes = diagram.get("nodes", [])
+    edges = diagram.get("edges", [])
 
-    dot.attr(
-        "node",
-        shape="box",
-        style="filled,rounded",
-        fillcolor="#d9e8fb",
-        color="#4a6fa5",
-        fontname="Arial",
-        fontsize="12",
-        margin="0.10,0.06"
-    )
+    if len(nodes) < 3:
+        score -= 30
+    if len(nodes) > 12:
+        score -= (len(nodes) - 12) * 4
 
-    dot.attr(
-        "edge",
-        color="#555555",
-        fontname="Arial",
-        fontsize="10",
-        arrowsize="0.7"
-    )
+    for node in nodes:
+        label = str(node.get("label", ""))
+        lower = label.lower()
 
-    styled_nodes = [auto_style_node(node) for node in diagram.get("nodes", [])]
+        if any(tok in lower for tok in FORBIDDEN_VISIBLE_TOKENS):
+            score -= 20
 
-    level_groups = {}
-    for node in styled_nodes:
-        level = get_node_level(node["id"], node["label"])
-        level_groups.setdefault(level, []).append(node)
+        if len(label) > 28:
+            score -= 5
 
-    # Разбиваем слишком длинные уровни на компактные подряды
-    # чтобы схема не была слишком широкой
-    max_per_row = 3
+        kind = node.get("kind", "")
+        if kind == "input" and any(x in lower for x in ["база", "данн", "телеметр", "материал"]):
+            score -= 10
+        if kind == "output" and any(x in lower for x in ["пользователь", "модератор", "администратор"]):
+            score -= 10
 
-    sorted_levels = sorted(level_groups.keys())
-    for level in sorted_levels:
-        rows = chunk_nodes(level_groups[level], max_per_row)
+    for edge in edges:
+        source = edge.get("source")
+        target = edge.get("target")
+        if not source or not target:
+            score -= 10
+            continue
 
-        for row_index, row_nodes in enumerate(rows):
-            with dot.subgraph() as s:
-                s.attr(rank="same")
-                for node in row_nodes:
-                    node = normalize_node_style(node)
-                    s.node(
-                        node["id"],
-                        node["label"],
-                        shape=node.get("shape", "box"),
-                        style=node.get("style", "filled,rounded"),
-                        fillcolor=node.get("fillcolor", "#d9e8fb"),
-                        color=node.get("color", "#4a6fa5")
-                    )
+        src_node = next((n for n in nodes if n.get("id") == source), None)
+        dst_node = next((n for n in nodes if n.get("id") == target), None)
+        if not src_node or not dst_node:
+            score -= 10
+            continue
 
-    layout_hint = diagram.get("layout_hint", "general")
+        src_level = get_node_level(source, src_node.get(
+            "label", ""), src_node.get("kind"))
+        dst_level = get_node_level(target, dst_node.get(
+            "label", ""), dst_node.get("kind"))
 
-    for edge in diagram.get("edges", []):
-        raw_label = edge.get("label", "")
-        label = raw_label.strip() if isinstance(raw_label, str) else ""
+        if dst_level < src_level:
+            score -= 4
+        if abs(dst_level - src_level) > 2:
+            score -= 6
 
-        if label in {"→", "->", "-->", "=>", ""}:
-            label = ""
+    return score
 
-        if len(label) > 18:
-            label = ""
 
-        edge_kwargs = {
-            "color": edge.get("color", "#555555"),
-            "style": edge.get("style", "solid"),
-            "penwidth": "1.1"
+def render_general_diagram(diagram: dict, output_name: str = "final_diagram") -> str:
+    def chunk_nodes(items, size):
+        if size <= 0:
+            size = 3
+        return [items[i:i + size] for i in range(0, len(items), size)]
+
+    def apply_default_style(node: dict) -> dict:
+        node = dict(node)
+        kind = str(node.get("kind", "block")).lower().strip()
+
+        style_map = {
+            "input": {
+                "shape": "ellipse",
+                "style": "filled",
+                "fillcolor": "#d9ead3",
+                "color": "#4f7f4f",
+            },
+            "conv": {
+                "shape": "box",
+                "style": "rounded,filled",
+                "fillcolor": "#d9e7f7",
+                "color": "#5a84c9",
+            },
+            "block": {
+                "shape": "box",
+                "style": "rounded,filled",
+                "fillcolor": "#d9e7f7",
+                "color": "#5a84c9",
+            },
+            "output": {
+                "shape": "ellipse",
+                "style": "filled",
+                "fillcolor": "#f4cccc",
+                "color": "#b45f06",
+            },
+            "pool": {
+                "shape": "ellipse",
+                "style": "filled",
+                "fillcolor": "#f4cccc",
+                "color": "#b45f06",
+            },
         }
 
+        base = style_map.get(kind, style_map["block"])
+        for k, v in base.items():
+            node.setdefault(k, v)
+
+        return node
+
+    def normalize_edge_attrs(edge: dict, src_level: int, dst_level: int, layout_hint: str) -> dict:
+        raw_style = edge.get("style", "solid")
+
+        edge_kwargs = {
+            "color": "#555555",
+            "style": "solid",
+            "penwidth": "1.1",
+        }
+
+        raw_color = edge.get("color")
+        if isinstance(raw_color, str) and raw_color.strip():
+            edge_kwargs["color"] = raw_color.strip()
+
+        if isinstance(raw_style, str) and raw_style.strip():
+            edge_kwargs["style"] = raw_style.strip()
+
+        if isinstance(raw_style, dict):
+            arrowhead = raw_style.get("arrowhead")
+            if isinstance(arrowhead, str) and arrowhead.strip():
+                if arrowhead.strip().lower() == "triangle":
+                    edge_kwargs["arrowhead"] = "normal"
+                else:
+                    edge_kwargs["arrowhead"] = arrowhead.strip()
+
+            line_style = raw_style.get("line_style")
+            if isinstance(line_style, str) and line_style.strip():
+                edge_kwargs["style"] = line_style.strip()
+
+            color = raw_style.get("color")
+            if isinstance(color, str) and color.strip():
+                edge_kwargs["color"] = color.strip()
+
+            penwidth = raw_style.get("penwidth")
+            if penwidth is not None:
+                edge_kwargs["penwidth"] = str(penwidth)
+
+        label = edge.get("label", "")
+        if not isinstance(label, str):
+            label = ""
+        label = label.strip()
+
+        if label in {"", "->", "-->", "=>", "→"}:
+            label = ""
+
+        if len(label) > 22:
+            label = ""
+
         if layout_hint == "general":
-            # Для general-схем стараемся не плодить лишние подписи на стрелках
             label = ""
 
         if label:
             edge_kwargs["label"] = label
 
-        dot.edge(edge["source"], edge["target"], **edge_kwargs)
+        if abs(dst_level - src_level) > 1:
+            edge_kwargs["constraint"] = "false"
+            edge_kwargs["color"] = "#777777"
+            edge_kwargs["penwidth"] = "0.9"
+            edge_kwargs["minlen"] = "2"
 
-    dot.render(output_name, format="png", cleanup=True)
-    dot.render(output_name, format="svg", cleanup=True)
-    dot.render(output_name, format="pdf", cleanup=True)
+        return edge_kwargs
 
-    print(f"Схема сохранена: {output_name}.png")
-    print(f"Схема сохранена: {output_name}.svg")
-    print(f"Схема сохранена: {output_name}.pdf")
+    output_dir = Path("outputs")
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    dot = Digraph(comment=diagram.get("title", "Diagram"))
+    dot.attr(
+        rankdir="TB",
+        splines="ortho",
+        newrank="true",
+        overlap="false",
+        nodesep="0.24",
+        ranksep="0.55",
+        pad="0.20",
+        bgcolor="white",
+    )
+
+    dot.attr(
+        "node",
+        fontname="Arial",
+        fontsize="12",
+        margin="0.14,0.08",
+        penwidth="1.2",
+    )
+    dot.attr(
+        "edge",
+        fontname="Arial",
+        fontsize="10",
+        arrowsize="0.7",
+    )
+
+    styled_nodes = [apply_default_style(n) for n in diagram.get("nodes", [])]
+
+    node_levels = {}
+    level_groups = {}
+
+    for node in styled_nodes:
+        node_id = node["id"]
+        label = node.get("label", node_id)
+        kind = node.get("kind")
+        level = get_node_level(node_id, label, kind)
+
+        node_levels[node_id] = level
+        level_groups.setdefault(level, []).append(node)
+
+    max_per_row_by_level = {
+        0: 2,
+        1: 2,
+        2: 3,
+        3: 3,
+    }
+
+    sorted_levels = sorted(level_groups.keys())
+
+    for level in sorted_levels:
+        max_per_row = max_per_row_by_level.get(level, 3)
+        rows = chunk_nodes(level_groups[level], max_per_row)
+
+        for row_idx, row in enumerate(rows):
+            with dot.subgraph(name=f"cluster_level_{level}_row_{row_idx}") as sub:
+                sub.attr(rank="same")
+                sub.attr(color="transparent")
+                sub.attr(penwidth="0")
+
+                previous_id = None
+                for node in row:
+                    sub.node(
+                        node["id"],
+                        node.get("label", node["id"]),
+                        shape=node.get("shape", "box"),
+                        style=node.get("style", "rounded,filled"),
+                        fillcolor=node.get("fillcolor", "#d9e7f7"),
+                        color=node.get("color", "#5a84c9"),
+                    )
+
+                    if previous_id is not None:
+                        sub.edge(
+                            previous_id,
+                            node["id"],
+                            style="invis",
+                            weight="10",
+                        )
+                    previous_id = node["id"]
+
+    for edge in diagram.get("edges", []):
+        src = edge.get("source")
+        dst = edge.get("target")
+
+        if not src or not dst or src == dst:
+            continue
+
+        src_level = node_levels.get(src, 2)
+        dst_level = node_levels.get(dst, 2)
+
+        edge_kwargs = normalize_edge_attrs(
+            edge=edge,
+            src_level=src_level,
+            dst_level=dst_level,
+            layout_hint=diagram.get("layout_hint", "general"),
+        )
+
+        dot.edge(src, dst, **edge_kwargs)
+
+    dot.filename = f"{output_name}.gv"
+    dot.directory = str(output_dir)
+
+    png_path = dot.render(format="png", cleanup=True)
+    print(f"Схема сохранена: {Path(png_path).name}")
+
+    svg_path = dot.render(format="svg", cleanup=True)
+    print(f"Схема сохранена: {Path(svg_path).name}")
+
+    pdf_path = dot.render(format="pdf", cleanup=True)
+    print(f"Схема сохранена: {Path(pdf_path).name}")
+
+    return png_path
 
 
 def render_pipeline_diagram(diagram: dict, output_name: str = "diagram"):
@@ -796,7 +1053,8 @@ def critique_diagram(user_task: str, draft_json: dict, references: list[dict] | 
 
 
 def clean_diagram_labels(diagram: dict) -> dict:
-    cleaned = dict(diagram)  # сохраняем все ключи (sections, renderer, color_scheme и т.д.)
+    # сохраняем все ключи (sections, renderer, color_scheme и т.д.)
+    cleaned = dict(diagram)
 
     bad_labels = {"→", "->", "-->", "=>", ""}
     if "edges" in cleaned:
@@ -833,6 +1091,9 @@ def improve_diagram(
         "Не удаляй поля, если они уже есть и корректны. "
         "Исправляй только то, что действительно нужно исправить. "
         "Верни только валидный JSON."
+        "Все видимые подписи и title должны быть только на русском языке. "
+        "Служебные kind могут оставаться внутренними: input, conv, block, output. "
+        "Но label нельзя писать как input, output, block, conv, UI, API, DB. "
     )
 
     user_prompt = f"""
@@ -847,6 +1108,8 @@ def improve_diagram(
 
         Важно:
         - сохрани title, layout_hint, renderer, style, если они уже есть;
+        - все видимые label и title должны быть только на русском языке;
+        - служебные kind оставь внутренними, но не показывай их в label;
         - не удаляй существующие корректные поля;
         - для general-диаграмм допустимые kind только: input, conv, block, output;
         - не используй actor, ui, service, database;
@@ -866,6 +1129,7 @@ def improve_diagram(
 
     try:
         improved = extract_json(raw_answer)
+        improved = clean_diagram_labels(improved)
         improved = restore_node_kinds(draft_json, improved)
         improved = normalize_general_diagram(improved, fallback=draft_json)
         return improved
@@ -891,28 +1155,41 @@ def normalize_general_diagram(diagram: dict, fallback: dict | None = None) -> di
 
     result = dict(diagram)
 
-    # сохраняем обязательные верхние поля из fallback, если модель их потеряла
     for key in ["title", "layout_hint", "renderer", "style"]:
         if key not in result and key in fallback:
             result[key] = fallback[key]
 
-    # дефолты
-    result.setdefault("title", "Untitled Diagram")
+    result.setdefault("title", "Архитектура системы")
     result.setdefault("layout_hint", "general")
     result.setdefault("renderer", "general")
     result.setdefault("style", {"direction": "TB"})
 
+    result["title"] = clean_visible_label(
+        result.get("title", "Архитектура системы"))
+
     kind_map = {
         "actor": "input",
-        "ui": "conv",
-        "service": "block",
-        "database": "output",
+        "user": "input",
+        "external": "input",
 
-        # допустимые оставляем как есть
+        "ui": "conv",
+        "interface": "conv",
+        "frontend": "conv",
+        "api": "conv",
+
+        "service": "block",
+        "module": "block",
+        "processor": "block",
+        "block": "block",
+
+        "database": "output",
+        "db": "output",
+        "storage": "output",
+        "repository": "output",
+        "output": "output",
+
         "input": "input",
         "conv": "conv",
-        "block": "block",
-        "output": "output",
     }
 
     fallback_kinds = {}
@@ -921,23 +1198,32 @@ def normalize_general_diagram(diagram: dict, fallback: dict | None = None) -> di
             fallback_kinds[node["id"]] = node["kind"]
 
     new_nodes = []
+    seen_ids = set()
+
     for node in result.get("nodes", []):
         node = dict(node)
 
-        node_id = node.get("id")
-        kind = node.get("kind")
+        node_id = str(node.get("id", "")).strip()
+        if not node_id:
+            continue
+        if node_id in seen_ids:
+            continue
+        seen_ids.add(node_id)
 
-        if kind in kind_map:
-            node["kind"] = kind_map[kind]
+        node["label"] = clean_visible_label(node.get("label", node_id))
+
+        raw_kind = str(node.get("kind", "")).strip().lower()
+        if raw_kind in kind_map:
+            node["kind"] = kind_map[raw_kind]
         elif node_id in fallback_kinds:
             node["kind"] = fallback_kinds[node_id]
         else:
-            node["kind"] = "block"
+            node["kind"] = infer_general_kind_from_label(node["label"])
 
         new_nodes.append(node)
 
     result["nodes"] = new_nodes
-    result.setdefault("edges", [])
+    result["edges"] = dedupe_edges(result.get("edges", []))
 
     return result
 
@@ -1012,7 +1298,6 @@ def generate_diagram(user_task: str, reference_description: dict | str | None = 
     references = merge_reference_sources(mode, reference_description)
     reference_text = format_references_for_prompt(references)
 
-    # Если у конфига есть свой json_format (например, infographic), используем его
     custom_format = config.get("json_format", "")
     if custom_format:
         json_format_block = custom_format
@@ -1048,31 +1333,63 @@ def generate_diagram(user_task: str, reference_description: dict | str | None = 
 Дополнительные требования:
 {extra_rules}
 
+Важно:
+- все видимые подписи и title должны быть только на русском языке;
+- не используй в label слова input, output, block, conv, ui, api, db, service;
+- kind может оставаться служебным внутренним полем;
+- не делай лишних связей;
+- не делай один центральный хаб без необходимости;
+- для general-схемы предпочитай уровни: верхний слой -> интерфейсы -> сервисы -> хранилища.
+
 Верни только валидный JSON без markdown и пояснений.
 
 Формат:
 {json_format_block}
 """
 
-    raw_answer = ask_llm(GENERATOR_MODEL, system_prompt, user_prompt)
+    best_candidate = None
+    best_score = -10**9
 
-    print("\n=== RAW ANSWER FROM GENERATOR ===")
-    print(raw_answer)
-    print("=== END RAW ANSWER ===\n")
+    for attempt in range(3):
+        raw_answer = ask_llm(GENERATOR_MODEL, system_prompt,
+                             user_prompt, temperature=0.12)
 
-    try:
-        return extract_json(raw_answer)
-    except Exception:
-        print("Ошибка парсинга JSON в generate_diagram()")
-        return {
-            "type": "flowchart",
-            "title": "Parse Error Fallback",
-            "layout_hint": layout_hint,
-            "style": {"direction": "TB", "theme": "clean"},
-            "lanes": [],
-            "nodes": [{"id": "error", "label": "Ошибка генерации JSON"}],
-            "edges": [],
-        }
+        print(f"\n=== RAW ANSWER FROM GENERATOR #{attempt + 1} ===")
+        print(raw_answer)
+        print("=== END RAW ANSWER ===\n")
+
+        try:
+            candidate = extract_json(raw_answer)
+
+            if layout_hint == "general":
+                candidate = normalize_general_diagram(candidate)
+
+            candidate = clean_diagram_labels(candidate)
+
+            score = score_general_candidate(
+                candidate) if layout_hint == "general" else 0
+            print(f"[GEN SCORE #{attempt + 1}] {score}")
+
+            if score > best_score:
+                best_score = score
+                best_candidate = candidate
+
+        except Exception:
+            print(
+                f"Ошибка парсинга JSON в generate_diagram(), попытка {attempt + 1}")
+
+    if best_candidate is not None:
+        return best_candidate
+
+    return {
+        "type": "flowchart",
+        "title": "Ошибка генерации",
+        "layout_hint": layout_hint,
+        "style": {"direction": "TB", "theme": "clean"},
+        "lanes": [],
+        "nodes": [{"id": "error", "label": "Ошибка генерации JSON", "kind": "block"}],
+        "edges": [],
+    }
 
 
 def main():
