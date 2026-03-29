@@ -7,6 +7,7 @@ import requests
 from pydantic import BaseModel
 from typing import Any
 from plotneuralnet_renderer import PlotNeuralNetRenderer
+from infographic_renderer import InfographicRenderer
 
 
 # Point PATH to Graphviz bin directory, not dot.exe itself.
@@ -74,7 +75,9 @@ def format_references_for_prompt(references: list[dict]) -> str:
     return "\n\n".join(parts)
 
 
-def load_diagram_types(folder: str = "diagram_types") -> list:
+def load_diagram_types(folder: str | None = None) -> list:
+    if folder is None:
+        folder = str(Path(__file__).resolve().parent / "diagram_types")
     path = Path(folder)
     configs = []
 
@@ -724,6 +727,10 @@ def render_diagram(diagram: dict, output_name: str = "diagram"):
         plot_renderer = PlotNeuralNetRenderer(project_root=".")
         return plot_renderer.render(diagram, output_name=output_name)
 
+    if renderer == "infographic" or layout_hint == "infographic":
+        info_renderer = InfographicRenderer()
+        return info_renderer.render(diagram, output_name=output_name)
+
     if renderer == "pipeline" or layout_hint == "pipeline":
         return render_pipeline_diagram(diagram, output_name)
 
@@ -789,23 +796,18 @@ def critique_diagram(user_task: str, draft_json: dict, references: list[dict] | 
 
 
 def clean_diagram_labels(diagram: dict) -> dict:
-    cleaned = {
-        "type": diagram.get("type", ""),
-        "title": diagram.get("title", ""),
-        "layout_hint": diagram.get("layout_hint", "general"),
-        "style": diagram.get("style", {}),
-        "lanes": diagram.get("lanes", []),
-        "nodes": diagram.get("nodes", []),
-        "edges": [],
-    }
+    cleaned = dict(diagram)  # сохраняем все ключи (sections, renderer, color_scheme и т.д.)
 
     bad_labels = {"→", "->", "-->", "=>", ""}
-    for edge in diagram.get("edges", []):
-        new_edge = edge.copy()
-        label = str(new_edge.get("label", "")).strip()
-        if label in bad_labels:
-            new_edge["label"] = ""
-        cleaned["edges"].append(new_edge)
+    if "edges" in cleaned:
+        new_edges = []
+        for edge in cleaned.get("edges", []):
+            new_edge = edge.copy()
+            label = str(new_edge.get("label", "")).strip()
+            if label in bad_labels:
+                new_edge["label"] = ""
+            new_edges.append(new_edge)
+        cleaned["edges"] = new_edges
 
     return cleaned
 
@@ -1010,6 +1012,32 @@ def generate_diagram(user_task: str, reference_description: dict | str | None = 
     references = merge_reference_sources(mode, reference_description)
     reference_text = format_references_for_prompt(references)
 
+    # Если у конфига есть свой json_format (например, infographic), используем его
+    custom_format = config.get("json_format", "")
+    if custom_format:
+        json_format_block = custom_format
+    else:
+        json_format_block = (
+            '{\n'
+            '  "title": "string",\n'
+            f'  "layout_hint": "{layout_hint}",\n'
+            f'  "renderer": "{config.get("renderer", "general")}",\n'
+            '  "nodes": [\n'
+            '    {\n'
+            '      "id": "string",\n'
+            '      "label": "string",\n'
+            '      "kind": "input|conv|pool|block|fc|output"\n'
+            '    }\n'
+            '  ],\n'
+            '  "edges": [\n'
+            '    {\n'
+            '      "source": "string",\n'
+            '      "target": "string"\n'
+            '    }\n'
+            '  ]\n'
+            '}'
+        )
+
     user_prompt = f"""
 Референсы:
 {reference_text}
@@ -1023,24 +1051,7 @@ def generate_diagram(user_task: str, reference_description: dict | str | None = 
 Верни только валидный JSON без markdown и пояснений.
 
 Формат:
-{{
-  "title": "string",
-  "layout_hint": "{layout_hint}",
-  "renderer": "{config.get('renderer', 'general')}",
-  "nodes": [
-    {{
-      "id": "string",
-      "label": "string",
-      "kind": "input|conv|pool|block|fc|output"
-    }}
-  ],
-  "edges": [
-    {{
-      "source": "string",
-      "target": "string"
-    }}
-  ]
-}}
+{json_format_block}
 """
 
     raw_answer = ask_llm(GENERATOR_MODEL, system_prompt, user_prompt)
@@ -1066,52 +1077,8 @@ def generate_diagram(user_task: str, reference_description: dict | str | None = 
 
 def main():
 
-    user_task = """Построй общую архитектурную диаграмму образовательной платформы.
+    user_task = "Нарисуй в 2д стиле архитектуру моего проекта, используй только русский язык"
 
-В системе есть внешние акторы:
-- Student
-- Teacher
-- Admin
-
-Пользовательские интерфейсы:
-- Web Portal
-- Mobile App
-
-Внутренние сервисы:
-- Auth Service
-- Course Management
-- Test Service
-- Notification
-- Analytics
-
-Хранилища данных:
-- User DB
-- Material DB
-- Result DB
-
-Логика системы:
-- Student работает через Web Portal и Mobile App
-- Teacher в основном работает через Web Portal
-- Admin работает через Web Portal
-- Web Portal взаимодействует с Auth Service, Course Management, Test Service
-- Mobile App взаимодействует с Auth Service, Course Management, Notification
-- Test Service сохраняет данные в Result DB
-- Course Management работает с Material DB
-- Auth Service работает с User DB
-- Analytics получает данные из Result DB и User DB
-- Notification используется как внутренний сервис оповещений
-
-Требования к схеме:
-- это именно general architecture diagram, а не pipeline
-- акторы должны быть сверху
-- интерфейсы должны быть отдельным слоем под акторами
-- сервисы должны быть в центральном слое как параллельные модули
-- базы данных должны быть внизу
-- не нужно показывать все возможные связи
-- избегай длинных диагональных стрелок
-- избегай перегруженного верхнего слоя
-- Notification не должен выглядеть как внешний узел
-- схема должна быть компактной и удобной для вставки в документ"""
     references = [
         {
             "type": "text",
