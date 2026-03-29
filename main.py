@@ -145,28 +145,42 @@ def ask_llm(model: str, system_prompt: str, user_prompt: str, timeout: tuple[int
 
 
 def extract_json(text: str) -> dict:
-    import re
-
     text = text.strip()
-    text = re.sub(r"^```json\s*", "", text)
-    text = re.sub(r"^```\s*", "", text)
-    text = re.sub(r"\s*```$", "", text)
 
-    start = text.find("{")
-    end = text.rfind("}")
+    decoder = json.JSONDecoder()
 
-    if start == -1 or end == -1:
-        raise ValueError("Не удалось найти JSON в ответе модели")
+    # пробуем найти первый JSON-объект в тексте
+    for start_idx, ch in enumerate(text):
+        if ch != "{":
+            continue
 
-    text = text[start:end + 1]
+        try:
+            obj, end_idx = decoder.raw_decode(text[start_idx:])
+            if isinstance(obj, dict):
+                return obj
+        except json.JSONDecodeError:
+            continue
 
-    try:
-        return json.loads(text)
-    except json.JSONDecodeError:
-        print("\n=== BAD JSON TEXT ===")
-        print(text)
-        print("=== END BAD JSON TEXT ===\n")
-        raise
+    print("=== BAD JSON TEXT ===")
+    print(text)
+    print("=== END BAD JSON TEXT ===")
+    raise ValueError("Не удалось извлечь JSON-объект из ответа модели")
+
+
+def restore_node_kinds(original: dict, improved: dict) -> dict:
+    original_kinds = {
+        node["id"]: node.get("kind")
+        for node in original.get("nodes", [])
+        if "id" in node
+    }
+
+    for node in improved.get("nodes", []):
+        if "kind" not in node:
+            old_kind = original_kinds.get(node.get("id"))
+            if old_kind:
+                node["kind"] = old_kind
+
+    return improved
 
 
 def detect_diagram_mode(user_task: str, configs: list[dict]) -> str:
@@ -722,15 +736,12 @@ def critique_diagram(user_task: str, draft_json: dict, references: list[dict] | 
 
     system_prompt = (
         "Ты критик диаграмм. "
-        "Твоя главная задача — оценить, насколько черновая схема соответствует запросу пользователя. "
-        "Сначала восстанови из запроса пользователя обязательные требования к схеме, "
-        "затем проверь, все ли они отражены в черновом JSON. "
-        "Только после этого оцени визуальное качество. "
-        "Если схема красивая, но не соответствует запросу, это серьезный недостаток. "
-        "Если в схеме есть лишние сущности, связи, этапы или подписи, которых не требует пользователь, укажи это. "
-        "Если отсутствуют обязательные блоки, этапы, входы/выходы, роли, ветвления или тип диаграммы — укажи это. "
-        "Разделяй проблемы на смысловые и визуальные. "
-        "Верни только valid JSON без markdown."
+        "Оцени соответствие пользовательскому запросу и качество структуры. "
+        "Но не критикуй и не предлагай удалять служебные поля внутреннего формата, "
+        "если они нужны пайплайну рендера. "
+        "К таким полям относятся title, renderer, layout_hint, style, nodes[].kind и другие системные поля. "
+        "Ты можешь критиковать только смысл схемы, состав элементов, связи, читаемость и визуальную организацию. "
+        "Нельзя предлагать менять JSON-контракт проекта."
     )
 
     user_prompt = f"""
@@ -809,36 +820,42 @@ def improve_diagram(
     refs_text = format_references_for_prompt(references)
 
     system_prompt = (
-        "Ты генератор диаграмм. "
-        "Исправь схему по замечаниям критика, но главный приоритет — соответствие запросу пользователя. "
-        "Если черновая схема расходится с задачей пользователя, исправь именно это в первую очередь. "
-        "Сохраняй удачные части схемы, но не бойся менять структуру, если она неверно отражает запрос. "
-        "Верни только валидный JSON. "
-        "Не используй markdown. "
-        "Не пиши пояснения. "
-        "Не добавляй текст до и после JSON."
+        "Ты исправляешь JSON диаграммы. "
+        "Главное правило: сохраняй совместимость с внутренним форматом проекта. "
+        "Нельзя придумывать новые поля и новые значения перечислений. "
+        "Для general-диаграмм допустимые значения nodes[].kind: input, conv, block, output. "
+        "Нельзя заменять их на actor, ui, service, database и другие значения. "
+        "Если хочешь отразить акторов, UI, сервисы и базы, делай это через существующие допустимые kind: "
+        "actor -> input, ui -> conv, service -> block, database -> output. "
+        "Сохраняй существующие корректные поля: title, layout_hint, renderer, style, nodes[].kind. "
+        "Не удаляй поля, если они уже есть и корректны. "
+        "Исправляй только то, что действительно нужно исправить. "
+        "Верни только валидный JSON."
     )
 
     user_prompt = f"""
-Запрос пользователя:
-{user_task}
+        Запрос пользователя:
+        {user_task}
 
-Референсы:
-{refs_text}
+        Черновой JSON:
+        {json.dumps(draft_json, ensure_ascii=False, indent=2)}
 
-Черновой JSON:
-{json.dumps(draft_json, ensure_ascii=False, indent=2)}
+        Замечания критика:
+        {json.dumps(critique_json, ensure_ascii=False, indent=2)}
 
-Замечания критика:
-{json.dumps(critique_json, ensure_ascii=False, indent=2)}
+        Важно:
+        - сохрани title, layout_hint, renderer, style, если они уже есть;
+        - не удаляй существующие корректные поля;
+        - для general-диаграмм допустимые kind только: input, conv, block, output;
+        - не используй actor, ui, service, database;
+        - если критик пишет про actors/services/databases, отрази это через существующие kind:
+        input = actors
+        conv = UI
+        block = services
+        output = databases
 
-Исправь схему так, чтобы:
-1. она соответствовала запросу пользователя,
-2. устраняла missing_requirements / wrong_interpretations / extra_elements,
-3. оставалась компактной и читаемой.
-
-Верни только исправленный JSON.
-"""
+        Верни только исправленный JSON.
+    """
     raw_answer = ask_llm(GENERATOR_MODEL, system_prompt, user_prompt)
 
     print("\n=== RAW ANSWER FROM IMPROVER ===")
@@ -846,7 +863,10 @@ def improve_diagram(
     print("=== END RAW ANSWER FROM IMPROVER ===\n")
 
     try:
-        return extract_json(raw_answer)
+        improved = extract_json(raw_answer)
+        improved = restore_node_kinds(draft_json, improved)
+        improved = normalize_general_diagram(improved, fallback=draft_json)
+        return improved
     except Exception:
         print("Ошибка парсинга improve-ответа. Возвращаю draft_json.")
         return draft_json
@@ -861,6 +881,63 @@ def image_to_data_url(image_path: str) -> str:
         encoded = base64.b64encode(f.read()).decode("utf-8")
 
     return f"data:{mime_type};base64,{encoded}"
+
+
+def normalize_general_diagram(diagram: dict, fallback: dict | None = None) -> dict:
+    if fallback is None:
+        fallback = {}
+
+    result = dict(diagram)
+
+    # сохраняем обязательные верхние поля из fallback, если модель их потеряла
+    for key in ["title", "layout_hint", "renderer", "style"]:
+        if key not in result and key in fallback:
+            result[key] = fallback[key]
+
+    # дефолты
+    result.setdefault("title", "Untitled Diagram")
+    result.setdefault("layout_hint", "general")
+    result.setdefault("renderer", "general")
+    result.setdefault("style", {"direction": "TB"})
+
+    kind_map = {
+        "actor": "input",
+        "ui": "conv",
+        "service": "block",
+        "database": "output",
+
+        # допустимые оставляем как есть
+        "input": "input",
+        "conv": "conv",
+        "block": "block",
+        "output": "output",
+    }
+
+    fallback_kinds = {}
+    for node in fallback.get("nodes", []):
+        if "id" in node and "kind" in node:
+            fallback_kinds[node["id"]] = node["kind"]
+
+    new_nodes = []
+    for node in result.get("nodes", []):
+        node = dict(node)
+
+        node_id = node.get("id")
+        kind = node.get("kind")
+
+        if kind in kind_map:
+            node["kind"] = kind_map[kind]
+        elif node_id in fallback_kinds:
+            node["kind"] = fallback_kinds[node_id]
+        else:
+            node["kind"] = "block"
+
+        new_nodes.append(node)
+
+    result["nodes"] = new_nodes
+    result.setdefault("edges", [])
+
+    return result
 
 
 def analyze_reference_image(image_path: str) -> dict:
