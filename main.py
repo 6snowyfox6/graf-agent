@@ -56,37 +56,75 @@ FORBIDDEN_VISIBLE_TOKENS = {
 def clean_visible_label(label: str) -> str:
     s = str(label or "").strip()
 
+    # убрать служебные хвосты
+    s = re.sub(
+        r"\s*\((input|output|block|conv|pool|service|db|ui|api)\)\s*",
+        "",
+        s,
+        flags=re.IGNORECASE,
+    )
+
+    # сначала длинные и специальные шаблоны
     replacements = [
         (r"\bweb\s*ui\b", "Веб-интерфейс"),
-        (r"\bui\b", "Интерфейс"),
+        (r"\bweb\b", "Веб-интерфейс"),
+        (r"\bapi\s*v?\.?\s*(\d+)\b", r"Программный интерфейс \1"),
         (r"\bapi\b", "Программный интерфейс"),
+        (r"\bui\b", "Интерфейс"),
+        (r"\bdb\s+user\b", "База пользователей"),
+        (r"\buser\s+db\b", "База пользователей"),
+        (r"\bdb\s+material\b", "База материалов"),
+        (r"\bmaterial\s+db\b", "База материалов"),
+        (r"\bdb\s+result\b", "База результатов"),
+        (r"\bresult\s+db\b", "База результатов"),
         (r"\bdb\b", "База данных"),
-        (r"\bservice\b", "Сервис"),
+        (r"\bnotification\b", "Уведомления"),
+        (r"\banalytics\b", "Аналитика"),
+        (r"\bauth\b", "Аутентификация"),
+        (r"\bdata\b", "Данные"),
+        (r"\bservice\b", ""),
         (r"\bblock\b", ""),
         (r"\bconv\b", ""),
         (r"\binput\b", ""),
         (r"\boutput\b", ""),
+        (r"\bpool\b", ""),
+        (r"\bвнутр\.\b", "внутренний"),
     ]
 
     for pattern, repl in replacements:
         s = re.sub(pattern, repl, s, flags=re.IGNORECASE)
 
-    s = re.sub(
-        r"\((input|output|block|conv|ui|api|db|service)\)",
-        "",
-        s,
-        flags=re.IGNORECASE
-    )
-    s = re.sub(r"\s+", " ", s).strip(" ,;:()[]-")
+    # специальные нормализации
+    s_low = s.lower().strip()
 
-    # Частые англо-русские замены
-    s = s.replace("Telemetry", "Телеметрия")
-    s = s.replace("Analytics", "Аналитика")
-    s = s.replace("Notification", "Уведомления")
-    s = s.replace("Processing", "Обработка")
-    s = s.replace("Moderator", "Модератор")
-    s = s.replace("User", "Пользователь")
-    s = s.replace("Material", "Материалы")
+    if s_low in {"api", "программный интерфейс api"}:
+        s = "Программный интерфейс"
+    elif s_low in {"web", "веб", "внешний интерфейс"}:
+        s = "Веб-интерфейс"
+    elif s_low in {"api пользователя", "api админа", "api вход", "api управление"}:
+        s = "Программный интерфейс"
+    elif s_low in {"пользователи"}:
+        s = "Пользователь"
+    elif s_low in {"администраторы", "админ"}:
+        s = "Администратор"
+
+    # не допускать "Интерфейс Программный интерфейс"
+    s = re.sub(
+        r"(?i)\bинтерфейс\s+программный интерфейс\b",
+        "Программный интерфейс",
+        s,
+    )
+
+    # не допускать "Программный интерфейс пользователей"
+    s = re.sub(
+        r"(?i)\bпрограммный интерфейс\s+пользователей\b",
+        "Программный интерфейс",
+        s,
+    )
+
+    # косметика
+    s = re.sub(r"\s+", " ", s).strip(" ,;:()[]-")
+    s = s.replace("  ", " ")
 
     if not s:
         s = "Компонент"
@@ -94,24 +132,23 @@ def clean_visible_label(label: str) -> str:
     return s
 
 
-def infer_general_kind_from_label(label: str) -> str:
-    t = str(label or "").lower()
+def infer_general_kind_from_label(label: str, node_id: str = "") -> str:
+    t = f"{node_id} {label}".lower()
 
     if any(x in t for x in [
-        "пользователь", "модератор", "администратор", "оператор",
-        "студент", "преподаватель", "клиент"
+        "пользователь", "админ", "администратор", "модератор",
+        "клиент", "оператор", "внешние системы", "внешние сервисы",
+        "интеграции"
     ]):
         return "input"
 
     if any(x in t for x in [
-        "интерфейс", "веб", "панель", "портал",
-        "приложение", "дашборд", "программный интерфейс"
+        "интерфейс", "веб", "api", "ui", "портал", "панель"
     ]):
         return "conv"
 
     if any(x in t for x in [
-        "база", "хранилище", "телеметр", "лог",
-        "материал", "данн", "результат", "профил"
+        "база", "хранилище", "лог", "телеметр", "архив"
     ]):
         return "output"
 
@@ -421,22 +458,146 @@ def auto_style_node(node: dict) -> dict:
     return styled
 
 
-def normalize_node_style(node: dict) -> dict:
-    node = node.copy()
+def get_general_node_sort_key(node: dict) -> tuple[int, int, str]:
+    label = str(node.get("label", "")).lower()
+    kind = str(node.get("kind", "")).lower()
 
-    shape = str(node.get("shape", "box")).lower().strip()
-    style = str(node.get("style", "filled,rounded")).strip()
+    if kind == "input":
+        if "пользователь" in label:
+            return (0, 0, label)
+        if "админ" in label or "администратор" in label or "модератор" in label:
+            return (0, 1, label)
+        if "внеш" in label or "интеграц" in label:
+            return (0, 2, label)
+        return (0, 9, label)
 
-    if shape in {"roundedrectangle", "rounded_rect", "rounded-box", "rectangle", "rect"}:
-        node["shape"] = "box"
-        if "rounded" not in style:
-            style = f"{style},rounded" if style else "rounded"
-        node["style"] = style
-    else:
-        node["shape"] = shape if shape else "box"
-        node["style"] = style if style else "filled,rounded"
+    if kind == "conv":
+        if "веб" in label:
+            return (1, 0, label)
+        if "программный интерфейс" in label:
+            return (1, 1, label)
+        return (1, 9, label)
 
-    return node
+    if kind == "block":
+        if "обработ" in label:
+            return (2, 0, label)
+        if "аутентиф" in label:
+            return (2, 1, label)
+        if "анализ" in label or "аналит" in label:
+            return (2, 2, label)
+        if "уведом" in label:
+            return (2, 3, label)
+        if "логир" in label:
+            return (2, 4, label)
+        return (2, 9, label)
+
+    if kind == "output":
+        if "пользоват" in label:
+            return (3, 0, label)
+        if "материал" in label:
+            return (3, 1, label)
+        if "результ" in label:
+            return (3, 2, label)
+        if "аналит" in label:
+            return (3, 3, label)
+        if "лог" in label:
+            return (3, 4, label)
+        if "телеметр" in label:
+            return (3, 5, label)
+        return (3, 9, label)
+
+    return (9, 9, label)
+
+
+def normalize_general_diagram(diagram: dict, fallback: dict | None = None) -> dict:
+    if fallback is None:
+        fallback = {}
+
+    result = dict(diagram)
+
+    for key in ["title", "layout_hint", "renderer", "style"]:
+        if key not in result and key in fallback:
+            result[key] = fallback[key]
+
+    result.setdefault("title", "Архитектура системы")
+    result.setdefault("layout_hint", "general")
+    result.setdefault("renderer", "general")
+    result.setdefault("style", {"direction": "TB"})
+
+    result["title"] = clean_visible_label(
+        result.get("title", "Архитектура системы"))
+
+    kind_map = {
+        "actor": "input",
+        "user": "input",
+        "external": "input",
+        "input": "input",
+
+        "ui": "conv",
+        "interface": "conv",
+        "frontend": "conv",
+        "api": "conv",
+        "conv": "conv",
+
+        "service": "block",
+        "module": "block",
+        "processor": "block",
+        "block": "block",
+
+        "database": "output",
+        "db": "output",
+        "storage": "output",
+        "repository": "output",
+        "pool": "output",
+        "output": "output",
+    }
+
+    new_nodes = []
+    seen_ids = set()
+
+    for node in result.get("nodes", []):
+        node = dict(node)
+
+        node_id = str(node.get("id", "")).strip()
+        if not node_id or node_id in seen_ids:
+            continue
+        seen_ids.add(node_id)
+
+        raw_kind = str(node.get("kind", "")).strip().lower()
+        mapped_kind = kind_map.get(raw_kind, raw_kind)
+
+        label = clean_visible_label(node.get("label", node_id))
+
+        # если kind сомнительный, вычислить по смыслу
+        if mapped_kind not in {"input", "conv", "block", "output"}:
+            mapped_kind = infer_general_kind_from_label(label, node_id)
+
+        # если по id/label видно, что это хранилище — принудительно output
+        id_low = node_id.lower()
+        text_low = f"{node_id} {label}".lower()
+
+        if any(x in text_low for x in ["база", "хранилище", "лог", "телеметр", "архив"]):
+            mapped_kind = "output"
+
+        if mapped_kind == "output":
+            label = normalize_storage_label(label)
+
+        # специальные улучшения для интерфейсов
+        if mapped_kind == "conv":
+            low = label.lower()
+            if low in {"web", "веб"}:
+                label = "Веб-интерфейс"
+            elif "программный интерфейс" in low or "api" in low:
+                label = "Программный интерфейс"
+
+        node["label"] = label
+        node["kind"] = mapped_kind
+        new_nodes.append(node)
+
+    result["nodes"] = new_nodes
+    result["edges"] = dedupe_edges(result.get("edges", []))
+
+    return result
 
 
 def score_general_candidate(diagram: dict) -> int:
@@ -644,6 +805,10 @@ def render_general_diagram(diagram: dict, output_name: str = "final_diagram") ->
 
         node_levels[node_id] = level
         level_groups.setdefault(level, []).append(node)
+
+    for level in level_groups:
+        level_groups[level] = sorted(
+            level_groups[level], key=get_general_node_sort_key)
 
     max_per_row_by_level = {
         0: 2,
