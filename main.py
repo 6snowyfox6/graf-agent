@@ -722,12 +722,15 @@ def critique_diagram(user_task: str, draft_json: dict, references: list[dict] | 
 
     system_prompt = (
         "Ты критик диаграмм. "
-        "Проверяй не только логику и полноту, но и визуальное качество схемы. "
-        "Оцени, насколько схема будет понятной, аккуратной и удобной для чтения. "
-        "Проверяй, нет ли слишком длинных подписей, перегруженности, лишних шагов и запутанных ветвлений. "
-        "Схема должна быть визуально чистой, компактной и хорошо восприниматься человеком. "
-        "Если можно сделать схему проще, чище или красивее — укажи это. "
-        "Верни только valid JSON с полями: score, problems, fixes."
+        "Твоя главная задача — оценить, насколько черновая схема соответствует запросу пользователя. "
+        "Сначала восстанови из запроса пользователя обязательные требования к схеме, "
+        "затем проверь, все ли они отражены в черновом JSON. "
+        "Только после этого оцени визуальное качество. "
+        "Если схема красивая, но не соответствует запросу, это серьезный недостаток. "
+        "Если в схеме есть лишние сущности, связи, этапы или подписи, которых не требует пользователь, укажи это. "
+        "Если отсутствуют обязательные блоки, этапы, входы/выходы, роли, ветвления или тип диаграммы — укажи это. "
+        "Разделяй проблемы на смысловые и визуальные. "
+        "Верни только valid JSON без markdown."
     )
 
     user_prompt = f"""
@@ -740,62 +743,38 @@ def critique_diagram(user_task: str, draft_json: dict, references: list[dict] | 
 Черновая схема:
 {json.dumps(draft_json, ensure_ascii=False, indent=2)}
 
-Оцени:
-- логическую полноту
-- понятность структуры
-- визуальную читаемость
-- длину подписей
-- простоту схемы
-- отсутствие перегруженности
-- удобство восприятия при рендере
+Сделай проверку в таком порядке:
+
+1. Выдели из запроса пользователя ключевые требования:
+   - тип диаграммы
+   - обязательные сущности / блоки
+   - обязательные связи / поток
+   - ограничения по стилю / компактности / читаемости
+   - важные подписи / входы / выходы
+
+2. Сравни требования с черновой схемой.
+
+3. Найди:
+   - что отсутствует
+   - что добавлено лишнее
+   - что интерпретировано неверно
+   - что мешает читаемости
 
 Верни JSON строго такого вида:
 {{
   "score": 0.0,
+  "task_fit_score": 0.0,
+  "visual_score": 0.0,
+  "missing_requirements": ["string"],
+  "wrong_interpretations": ["string"],
+  "extra_elements": ["string"],
+  "visual_problems": ["string"],
   "problems": ["string"],
   "fixes": ["string"]
 }}
 """
-
     raw_answer = ask_llm(CRITIC_MODEL, system_prompt, user_prompt)
     return extract_json(raw_answer)
-
-
-def improve_diagram(user_task: str, draft_json: dict, critique_json: dict) -> dict:
-    system_prompt = (
-        "Ты генератор диаграмм. "
-        "Исправь схему по замечаниям критика. "
-        "Сохрани структуру схемы, но внеси только необходимые улучшения. "
-        "Не переписывай схему полностью без необходимости. "
-        "Верни только валидный JSON. "
-        "Не используй markdown. "
-        "Не пиши пояснения. "
-        "Не добавляй текст до и после JSON."
-    )
-
-    user_prompt = f"""
-Исправь схему по замечаниям критика.
-
-Черновой JSON:
-{json.dumps(draft_json, ensure_ascii=False)}
-
-Замечания критика:
-{json.dumps(critique_json, ensure_ascii=False)}
-
-Верни только исправленный JSON.
-"""
-
-    raw_answer = ask_llm(GENERATOR_MODEL, system_prompt, user_prompt)
-
-    print("\n=== RAW ANSWER FROM IMPROVER ===")
-    print(raw_answer)
-    print("=== END RAW ANSWER FROM IMPROVER ===\n")
-
-    try:
-        return extract_json(raw_answer)
-    except Exception:
-        print("Ошибка парсинга improve-ответа. Возвращаю draft_json.")
-        return draft_json
 
 
 def clean_diagram_labels(diagram: dict) -> dict:
@@ -818,6 +797,59 @@ def clean_diagram_labels(diagram: dict) -> dict:
         cleaned["edges"].append(new_edge)
 
     return cleaned
+
+
+def improve_diagram(
+    user_task: str,
+    draft_json: dict,
+    critique_json: dict,
+    references: list[dict] | None = None
+) -> dict:
+    references = normalize_references(references or [])
+    refs_text = format_references_for_prompt(references)
+
+    system_prompt = (
+        "Ты генератор диаграмм. "
+        "Исправь схему по замечаниям критика, но главный приоритет — соответствие запросу пользователя. "
+        "Если черновая схема расходится с задачей пользователя, исправь именно это в первую очередь. "
+        "Сохраняй удачные части схемы, но не бойся менять структуру, если она неверно отражает запрос. "
+        "Верни только валидный JSON. "
+        "Не используй markdown. "
+        "Не пиши пояснения. "
+        "Не добавляй текст до и после JSON."
+    )
+
+    user_prompt = f"""
+Запрос пользователя:
+{user_task}
+
+Референсы:
+{refs_text}
+
+Черновой JSON:
+{json.dumps(draft_json, ensure_ascii=False, indent=2)}
+
+Замечания критика:
+{json.dumps(critique_json, ensure_ascii=False, indent=2)}
+
+Исправь схему так, чтобы:
+1. она соответствовала запросу пользователя,
+2. устраняла missing_requirements / wrong_interpretations / extra_elements,
+3. оставалась компактной и читаемой.
+
+Верни только исправленный JSON.
+"""
+    raw_answer = ask_llm(GENERATOR_MODEL, system_prompt, user_prompt)
+
+    print("\n=== RAW ANSWER FROM IMPROVER ===")
+    print(raw_answer)
+    print("=== END RAW ANSWER FROM IMPROVER ===\n")
+
+    try:
+        return extract_json(raw_answer)
+    except Exception:
+        print("Ошибка парсинга improve-ответа. Возвращаю draft_json.")
+        return draft_json
 
 
 def image_to_data_url(image_path: str) -> str:
