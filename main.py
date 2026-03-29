@@ -331,11 +331,18 @@ def restore_node_kinds(original: dict, improved: dict) -> dict:
 
 def detect_diagram_mode(user_task: str, configs: list[dict]) -> str:
     text = user_task.lower()
+    matches = []
 
     for config in configs:
         keywords = config.get("keywords", [])
-        if any(word.lower() in text for word in keywords):
-            return config["name"]
+        for word in keywords:
+            idx = text.find(word.lower())
+            if idx != -1:
+                matches.append((idx, config["name"]))
+
+    if matches:
+        matches.sort(key=lambda x: x[0])
+        return matches[0][1]
 
     return "general"
 
@@ -1559,32 +1566,29 @@ def generate_diagram(user_task: str, reference_description: dict | str | None = 
 
 def main():
 
-    user_task = "Нарисуй в 2д стиле архитектуру моего проекта, используй только русский язык"
+    user_task = """
+Создай вертикальную инфографику на тему 'Архитектура Vision Transformer (ViT)'.
+Цветовая схема пускай будет 'neon'.
 
-    references = [
-        {
-            "type": "text",
-            "name": "academic style",
-            "content": "Минималистичная академичная схема, короткие подписи, компактная компоновка"
-        },
-        {
-            "type": "json",
-            "name": "sample architecture",
-            "content": {
-                "type": "flowchart",
-                "layout_hint": "general",
-                "nodes": [
-                    {"id": "a", "label": "Input"},
-                    {"id": "b", "label": "Processing"},
-                    {"id": "c", "label": "Output"}
-                ],
-                "edges": [
-                    {"source": "a", "target": "b", "label": ""},
-                    {"source": "b", "target": "c", "label": ""}
-                ]
-            }
-        }
-    ]
+СТРОГАЯ СТРУКТУРА:
+1. Начни с секции типа 'text_block', дай краткое введение (что такое ViT).
+2. Обязательно вставь секцию типа 'neural_network'! Внутри нее в поле diagram опиши такие узлы (nodes), чтобы получилась крутая схема:
+   - Входное изображение (Input)
+   - Patch Embedding (эмбеддинг патчей)
+   - Transformer Encoder (Трансформер-блок)
+   - Classification Head (Голова классификации)
+   - Output (Результат)
+   И свяжи их через edges по порядку.
+3. Добавь таблицу сравнения (comparison) "ViT против CNN".
+4. Сделай облако тегов (tags) с ключевыми механизмами (например: Self-Attention, Patches, MLP).
+5. Не выдумывай точных метрик, используй заглушки вида "XX% точность".
+"""
+
+
+
+    # Референсы теперь пустые по умолчанию. Скрипт будет подтягивать 
+    # только те файлы, что лежат в папке references/ (если они там есть).
+    references = []
 
     print("=== ШАГ 1: Генерация черновика ===")
     draft = generate_diagram(user_task, references)
@@ -1599,7 +1603,10 @@ def main():
     print(json.dumps(final, ensure_ascii=False, indent=2))
 
     final_clean = clean_diagram_labels(final)
-    render_diagram(final_clean, "final_diagram")
+    
+    import time
+    output_filename = f"diagram_{int(time.time())}"
+    render_diagram(final_clean, output_filename)
 
 
 if __name__ == "__main__":

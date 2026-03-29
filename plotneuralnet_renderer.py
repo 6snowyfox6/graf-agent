@@ -101,6 +101,9 @@ class PlotNeuralNetRenderer:
 
         tex = f"""
 \\documentclass[border=8pt, multi, tikz]{{standalone}}
+\\usepackage[T2A]{{fontenc}}
+\\usepackage[utf8]{{inputenc}}
+\\usepackage[russian,english]{{babel}}
 \\usepackage{{import}}
 \\subimport{{{self.layers_dir.as_posix()}/}}{{init}}
 \\usetikzlibrary{{positioning}}
@@ -380,14 +383,16 @@ class PlotNeuralNetRenderer:
             cmd,
             cwd=tex_path.parent,
             capture_output=True,
-            text=True,
+            text=False,
         )
 
         if result.returncode != 0:
+            out_str = result.stdout.decode('utf-8', errors='replace') if result.stdout else ""
+            err_str = result.stderr.decode('utf-8', errors='replace') if result.stderr else ""
             raise PlotNeuralNetRenderError(
                 "Ошибка компиляции LaTeX.\n"
-                f"STDOUT:\n{result.stdout}\n\n"
-                f"STDERR:\n{result.stderr}"
+                f"STDOUT:\n{out_str}\n\n"
+                f"STDERR:\n{err_str}"
             )
 
     def _sanitize_id(self, value: str) -> str:

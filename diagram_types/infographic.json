@@ -1,7 +1,7 @@
 {
   "name": "infographic",
   "keywords": [
-    "инфографика",
+    "инфографик",
     "infographic",
     "статистик",
     "statistics",
@@ -28,25 +28,34 @@
     "обзор в цифрах",
     "overview in numbers"
   ],
-  "system_prompt": "Ты генератор инфографики. По описанию пользователя создай структурированный JSON для визуальной инфографики. Выдели ключевые метрики, факты, сравнения или шаги. Не используй nodes/edges — используй секции (sections). Каждая секция имеет свой тип: stat, text_block, comparison, steps или timeline. Возвращай только валидный JSON без markdown и пояснений.",
+  "system_prompt": "Ты генератор инфографики. По описанию пользователя создай структурированный JSON для визуальной инфографики. Выдели ключевые метрики, факты, сравнения или шаги. Не используй nodes/edges — используй секции (sections). Каждая секция имеет свой тип: stat, text_block, comparison, steps, timeline, donut_chart, gauge, tags, process или image. Возвращай только валидный JSON без markdown и пояснений.",
   "extra_rules": [
     "это инфографика, а не блок-схема и не граф",
+    "ВАЖНО: не копируй одну и ту же шаблонную структуру секций!",
+    "выбирай 3-6 разных секций, которые лучше всего раскрывают тему",
+    "перемешивай порядок секций каждый раз, чтобы инфографика выглядела уникально",
     "не используй nodes и edges",
     "используй массив sections с типизированными секциями",
-    "допустимые типы секций: stat, text_block, comparison, steps, timeline",
-    "stat — одна ключевая метрика: value (число или процент), label (название), icon (опционально)",
+    "допустимые типы секций: stat, text_block, comparison, steps, timeline, donut_chart, gauge, tags, process, image, neural_network",
+    "для neural_network создай внутри поле diagram с полями nodes (массив с id, label, kind) и edges (массив с source, target)",
+    "stat — одна ключевая метрика: value (число или процент), label (название), icon (опционально, варианты: chart, users, money, time, star, arrow-up, check, gear, lightning, globe, shield, smartphone, heart)",
     "text_block — блок текста: title (заголовок), content (текст)",
-    "comparison — сравнение: items — массив объектов {label, value}",
-    "steps — пошаговый процесс: items — массив объектов {step, title, description}",
-    "timeline — хронология: items — массив объектов {date, event}",
+    "comparison — горизонтальный столбчатый график: title (опционально), items — массив объектов {label, value}",
+    "steps — пошаговый процесс: title (опционально), items — массив объектов {step, title, description}",
+    "timeline — хронология: title (опционально), items — массив объектов {date, event}",
+    "donut_chart — круговая диаграмма: title (опционально), items — массив объектов {label, value}",
+    "gauge — шкала прогресса (спидометр) от 0 до max_value: label (название), value (числовое значение), max_value (максимальное числовое значение)",
+    "tags — облако тегов: title (опционально), items — массив строк (слов или фраз)",
+    "process — горизонтальный процесс (шевроны-стрелки): title (опционально), items — массив объектов {step, title} (максимум 4-5 шагов)",
+    "image — картинка по теме: url (используй 'https://picsum.photos/seed/<тематическое_слово_на_английском>/720/300'), caption (опционально)",
     "используй 3–8 секций, не перегружай",
     "подписи должны быть короткими и информативными",
     "используй реалистичные значения, если пользователь не указал точные числа",
-    "color_scheme может быть: blue, green, orange, purple, dark",
-    "выбирай color_scheme по тематике: бизнес — blue, экология — green, технологии — purple",
+    "color_scheme может быть: blue, green, orange, purple, dark, sunset, cyberpunk, neon, pastel",
+    "выбирай color_scheme по тематике: бизнес — blue/sunset, технологии — cyberpunk/neon, экология — green",
     "если пользователь указал конкретные числа, используй их точно"
   ],
   "layout_hint": "infographic",
   "renderer": "infographic",
-  "json_format": "{\n  \"title\": \"string\",\n  \"subtitle\": \"string (опционально)\",\n  \"layout_hint\": \"infographic\",\n  \"renderer\": \"infographic\",\n  \"color_scheme\": \"blue|green|orange|purple|dark\",\n  \"sections\": [\n    {\n      \"type\": \"stat\",\n      \"value\": \"string (число, процент)\",\n      \"label\": \"string\",\n      \"icon\": \"chart|users|money|time|star (опционально)\"\n    },\n    {\n      \"type\": \"text_block\",\n      \"title\": \"string\",\n      \"content\": \"string\"\n    },\n    {\n      \"type\": \"comparison\",\n      \"title\": \"string (опционально)\",\n      \"items\": [\n        {\"label\": \"string\", \"value\": \"string\"}\n      ]\n    },\n    {\n      \"type\": \"steps\",\n      \"title\": \"string (опционально)\",\n      \"items\": [\n        {\"step\": 1, \"title\": \"string\", \"description\": \"string\"}\n      ]\n    },\n    {\n      \"type\": \"timeline\",\n      \"title\": \"string (опционально)\",\n      \"items\": [\n        {\"date\": \"string\", \"event\": \"string\"}\n      ]\n    }\n  ]\n}"
+  "json_format": "{\n  \"title\": \"string\",\n  \"subtitle\": \"string (опционально)\",\n  \"layout_hint\": \"infographic\",\n  \"renderer\": \"infographic\",\n  \"color_scheme\": \"blue|green|orange|purple|dark|sunset|cyberpunk|neon|pastel\",\n  \"sections\": [\n    {\n      \"type\": \"ВЫБЕРИ_ТИП_1 (например neural_network или image)\",\n      \"title\": \"string\"\n    },\n    {\n      \"type\": \"stat\",\n      \"value\": \"100%\",\n      \"label\": \"Пример обязательной статистики\",\n      \"icon\": \"star\"\n    },\n    {\n      \"type\": \"ВЫБЕРИ_ТИП_2 (например donut_chart или text_block)\"\n    },\n    {\n      \"type\": \"ВЫБЕРИ_ТИП_3\",\n      \"items\": []\n    }\n  ]\n}"
 }
