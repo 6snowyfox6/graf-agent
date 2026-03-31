@@ -3,49 +3,33 @@ import base64
 import mimetypes
 import json
 import re
+import time
 from pathlib import Path
 import requests
-from pydantic import BaseModel
-from typing import Any
+
 from plotneuralnet_renderer import PlotNeuralNetRenderer
 from infographic_renderer import InfographicRenderer
 from graphviz import Digraph
 
+# Локальные endpoints llama-cpp-python
+# Qwen (генератор) на порту 8000, Gemma (критик/vision) на порту 8001
+QWEN_URL = "http://127.0.0.1:8000/v1/chat/completions"
+GEMMA_URL = "http://127.0.0.1:8001/v1/chat/completions"
 
-# Point PATH to Graphviz bin directory, not dot.exe itself.
-os.environ["PATH"] += os.pathsep + r"C:\Program Files\Graphviz\bin"
-os.environ["PATH"] += os.pathsep + r"C:\Program Files (x86)\Graphviz\bin"
+GENERATOR_MODEL = "qwen2.5-7b-instruct"
+VISION_MODEL = "gemma-3-4b-it"
+CRITIC_MODEL = "gemma-3-4b-it"
 
-BASE_URL = "http://192.168.0.130:1234/v1/chat/completions"
+MODEL_ENDPOINTS: dict[str, str] = {
+    GENERATOR_MODEL: QWEN_URL,
+    VISION_MODEL: GEMMA_URL,
+    CRITIC_MODEL: GEMMA_URL,
+}
 
-GENERATOR_MODEL = "qwen/qwen3-8b"
-VISION_MODEL = "google_gemma-3-4b-it"
-CRITIC_MODEL = "google_gemma-3-4b-it"
-
-
-class GenerateRequest(BaseModel):
-    user_task: str
-    references: list[dict[str, Any]] = []
+def _get_endpoint(model: str) -> str:
+    return MODEL_ENDPOINTS.get(model, QWEN_URL)
 
 
-def normalize_references(references: list[dict]) -> list[dict]:
-    normalized = []
-
-    for ref in references:
-        ref_type = ref.get("type", "text")
-        name = ref.get("name", "reference")
-        content = ref.get("content", "")
-
-        if ref_type == "json" and isinstance(content, dict):
-            content = json.dumps(content, ensure_ascii=False, indent=2)
-
-        normalized.append({
-            "type": ref_type,
-            "name": name,
-            "content": content
-        })
-
-    return normalized
 
 
 FORBIDDEN_VISIBLE_TOKENS = {
@@ -183,33 +167,7 @@ def dedupe_edges(edges: list[dict]) -> list[dict]:
     return result
 
 
-def format_references_for_prompt(references: list[dict]) -> str:
-    if not references:
-        return "Референсы не заданы."
 
-    parts = []
-
-    for i, ref in enumerate(references, start=1):
-        ref_type = ref["type"]
-        name = ref["name"]
-        content = ref["content"]
-
-        if ref_type == "text":
-            parts.append(
-                f"Референс {i} (text, {name}):\n{content}"
-            )
-
-        elif ref_type == "json":
-            parts.append(
-                f"Референс {i} (json, {name}):\n{content}"
-            )
-
-        elif ref_type == "image":
-            parts.append(
-                f"Референс {i} (image, {name}):\nФайл изображения: {content}"
-            )
-
-    return "\n\n".join(parts)
 
 
 def load_diagram_types(folder: str | None = None) -> list:
@@ -264,8 +222,7 @@ if not DIAGRAM_CONFIGS:
     ]
 
 
-def chunk_nodes(items: list, chunk_size: int) -> list[list]:
-    return [items[i:i + chunk_size] for i in range(0, len(items), chunk_size)]
+
 
 
 def ask_llm(
@@ -275,6 +232,7 @@ def ask_llm(
     timeout: tuple[int, int] = (30, 300),
     temperature: float = 0.15
 ) -> str:
+    endpoint = _get_endpoint(model)
     payload = {
         "model": model,
         "messages": [
@@ -284,7 +242,9 @@ def ask_llm(
         "temperature": temperature,
     }
 
-    response = requests.post(BASE_URL, json=payload, timeout=timeout)
+    response = requests.post(endpoint, json=payload, timeout=timeout)
+    if response.status_code >= 400:
+        print(f"[LLM ERROR] {response.status_code}: {response.text}")
     response.raise_for_status()
     data = response.json()
     return data["choices"][0]["message"]["content"]
@@ -516,95 +476,7 @@ def get_general_node_sort_key(node: dict) -> tuple[int, int, str]:
     return (9, 9, label)
 
 
-def normalize_general_diagram(diagram: dict, fallback: dict | None = None) -> dict:
-    if fallback is None:
-        fallback = {}
 
-    result = dict(diagram)
-
-    for key in ["title", "layout_hint", "renderer", "style"]:
-        if key not in result and key in fallback:
-            result[key] = fallback[key]
-
-    result.setdefault("title", "Архитектура системы")
-    result.setdefault("layout_hint", "general")
-    result.setdefault("renderer", "general")
-    result.setdefault("style", {"direction": "TB"})
-
-    result["title"] = clean_visible_label(
-        result.get("title", "Архитектура системы"))
-
-    kind_map = {
-        "actor": "input",
-        "user": "input",
-        "external": "input",
-        "input": "input",
-
-        "ui": "conv",
-        "interface": "conv",
-        "frontend": "conv",
-        "api": "conv",
-        "conv": "conv",
-
-        "service": "block",
-        "module": "block",
-        "processor": "block",
-        "block": "block",
-
-        "database": "output",
-        "db": "output",
-        "storage": "output",
-        "repository": "output",
-        "pool": "output",
-        "output": "output",
-    }
-
-    new_nodes = []
-    seen_ids = set()
-
-    for node in result.get("nodes", []):
-        node = dict(node)
-
-        node_id = str(node.get("id", "")).strip()
-        if not node_id or node_id in seen_ids:
-            continue
-        seen_ids.add(node_id)
-
-        raw_kind = str(node.get("kind", "")).strip().lower()
-        mapped_kind = kind_map.get(raw_kind, raw_kind)
-
-        label = clean_visible_label(node.get("label", node_id))
-
-        # если kind сомнительный, вычислить по смыслу
-        if mapped_kind not in {"input", "conv", "block", "output"}:
-            mapped_kind = infer_general_kind_from_label(label, node_id)
-
-        # если по id/label видно, что это хранилище — принудительно output
-        id_low = node_id.lower()
-        text_low = f"{node_id} {label}".lower()
-
-        if any(x in text_low for x in ["база", "хранилище", "лог", "телеметр", "архив"]):
-            mapped_kind = "output"
-
-        if mapped_kind == "output":
-            label = normalize_storage_label(label)
-
-        # специальные улучшения для интерфейсов
-        if mapped_kind == "conv":
-            low = label.lower()
-            if low in {"web", "веб"}:
-                label = "Веб-интерфейс"
-            elif "программный интерфейс" in low or "api" in low:
-                label = "Программный интерфейс"
-
-        node["label"] = label
-        node["kind"] = mapped_kind
-        new_nodes.append(node)
-
-    result["nodes"] = new_nodes
-    result["edges"] = dedupe_edges(result.get("edges", []))
-
-    return result
 
 
 def score_general_candidate(diagram: dict) -> int:
@@ -1443,7 +1315,7 @@ def analyze_reference_image(image_path: str) -> dict:
         "temperature": 0.2,
     }
 
-    response = requests.post(BASE_URL, json=payload, timeout=(30, 180))
+    response = requests.post(_get_endpoint(VISION_MODEL), json=payload, timeout=(30, 180))
     print("STATUS:", response.status_code)
     print("RESPONSE TEXT:")
     print(response.text)
@@ -1567,21 +1439,9 @@ def generate_diagram(user_task: str, reference_description: dict | str | None = 
 def main():
 
     user_task = """
-Создай вертикальную инфографику на тему 'Архитектура Vision Transformer (ViT)'.
-Цветовая схема пускай будет 'neon'.
-
-СТРОГАЯ СТРУКТУРА:
-1. Начни с секции типа 'text_block', дай краткое введение (что такое ViT).
-2. Обязательно вставь секцию типа 'neural_network'! Внутри нее в поле diagram опиши такие узлы (nodes), чтобы получилась крутая схема:
-   - Входное изображение (Input)
-   - Patch Embedding (эмбеддинг патчей)
-   - Transformer Encoder (Трансформер-блок)
-   - Classification Head (Голова классификации)
-   - Output (Результат)
-   И свяжи их через edges по порядку.
-3. Добавь таблицу сравнения (comparison) "ViT против CNN".
-4. Сделай облако тегов (tags) с ключевыми механизмами (например: Self-Attention, Patches, MLP).
-5. Не выдумывай точных метрик, используй заглушки вида "XX% точность".
+Нарисуй архитектуру модели ResNet-50.
+Покажи основные блоки: вход, начальную свёртку, residual-блоки по стадиям, global average pooling и классификатор.
+Схема должна быть компактной, 6-8 блоков максимум.
 """
 
 
@@ -1604,7 +1464,6 @@ def main():
 
     final_clean = clean_diagram_labels(final)
     
-    import time
     output_filename = f"diagram_{int(time.time())}"
     render_diagram(final_clean, output_filename)
 
