@@ -38,3 +38,6 @@ llm/
 
 .DS_Store
 Thumbs.db
+
+models/
+
