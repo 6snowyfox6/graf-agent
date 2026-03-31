@@ -1224,9 +1224,24 @@ def critique_diagram(user_task: str, draft_json: dict, references: list[dict] | 
     return extract_json(raw_answer)
 
 
+def _balance_parentheses(text: str) -> str:
+    opened = text.count('(')
+    closed = text.count(')')
+    if opened > closed:
+        return text + ')' * (opened - closed)
+    return text
+
+def _recursive_clean_strings(data: Any) -> Any:
+    if isinstance(data, dict):
+        return {k: _recursive_clean_strings(v) for k, v in data.items()}
+    elif isinstance(data, list):
+        return [_recursive_clean_strings(v) for v in data]
+    elif isinstance(data, str):
+        return _balance_parentheses(data)
+    return data
+
 def clean_diagram_labels(diagram: dict) -> dict:
-    # сохраняем все ключи (sections, renderer, color_scheme и т.д.)
-    cleaned = dict(diagram)
+    cleaned = _recursive_clean_strings(diagram)
 
     bad_labels = {"→", "->", "-->", "=>", ""}
     if "edges" in cleaned:
@@ -1567,23 +1582,16 @@ def generate_diagram(user_task: str, reference_description: dict | str | None = 
 def main():
 
     user_task = """
-Создай вертикальную инфографику на тему 'Архитектура Vision Transformer (ViT)'.
-Цветовая схема пускай будет 'neon'.
+    Сделай инфографику про интеграцию SHAP (SHapley Additive exPlanations) в пайплайн оценки модели.
+    Цветовая схема: 'dark'.
+    Структура:
+    1. text_block "Зачем нужен SHAP?".
+    2. neural_network с архитектурой пайплайна: 
+    Узлы: Входные фичи (input) -> Предобработка (conv) -> Machine Learning Model (block) -> SHAP Explainer (fc) -> Вывод важности фичей (output).
+    3. tags с ключевыми понятиями SHAP (Game Theory, Feature Importance, Local/Global Explanation).
+    """
 
-СТРОГАЯ СТРУКТУРА:
-1. Начни с секции типа 'text_block', дай краткое введение (что такое ViT).
-2. Обязательно вставь секцию типа 'neural_network'! Внутри нее в поле diagram опиши такие узлы (nodes), чтобы получилась крутая схема:
-   - Входное изображение (Input)
-   - Patch Embedding (эмбеддинг патчей)
-   - Transformer Encoder (Трансформер-блок)
-   - Classification Head (Голова классификации)
-   - Output (Результат)
-   И свяжи их через edges по порядку.
-3. Добавь таблицу сравнения (comparison) "ViT против CNN".
-4. Сделай облако тегов (tags) с ключевыми механизмами (например: Self-Attention, Patches, MLP).
-5. Не выдумывай точных метрик, используй заглушки вида "XX% точность".
-"""
-
+    
 
 
     # Референсы теперь пустые по умолчанию. Скрипт будет подтягивать 

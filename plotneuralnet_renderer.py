@@ -77,7 +77,7 @@ class PlotNeuralNetRenderer:
         }
 
     def build_tex(self, diagram: dict[str, Any]) -> str:
-        title = diagram.get("title", "Neural Architecture")
+        title = self._balance_parentheses(diagram.get("title", ""))
         nodes = diagram.get("nodes", [])
         edges = diagram.get("edges", [])
 
@@ -113,11 +113,11 @@ class PlotNeuralNetRenderer:
 \\begin{{tikzpicture}}
 \\tikzstyle{{connection}}=[ultra thick,every node/.style={{sloped,allow upside down}},draw=black!70,opacity=0.7]
 
-\\node[anchor=west] at (-1, 3.2, 0) {{\\Large \\bfseries {self._escape_latex(title)}}};
-
 {chr(10).join(node_blocks)}
 
 {chr(10).join(edge_blocks)}
+
+{f"\\\\node[above=8mm, align=center] at (current bounding box.north) {{{{\\\\Large\\\\bfseries\\\\sffamily {self._escape_latex(title)}}}}};" if title else ""}
 
 \\end{{tikzpicture}}
 \\end{{document}}
@@ -202,8 +202,16 @@ class PlotNeuralNetRenderer:
                 block[key] = node[key]
 
         return block
-    def _shorten_label(self, label: str | None, max_words: int = 3, max_chars: int = 26) -> str:
-        if label is None:
+    def _balance_parentheses(self, text: str) -> str:
+        # Восстанавливаем закрывающие дуги, если модель их случайно обрезала
+        opened = text.count('(')
+        closed = text.count(')')
+        if opened > closed:
+            text += ')' * (opened - closed)
+        return text
+
+    def _shorten_label(self, label: str | None, max_words: int = 20, max_chars: int = 45) -> str:
+        if not label:
             return "Block"
 
         label = str(label).strip()
@@ -211,27 +219,19 @@ class PlotNeuralNetRenderer:
             return "Block"
 
         protected = {
-            "Input",
-            "Conv Stem",
-            "CNN Blocks",
-            "Transformer Blocks",
-            "Fusion",
-            "Cls Head",
-            "Output",
-            "FC"
+            "Input", "Conv Stem", "CNN Blocks",
+            "Transformer Blocks", "Fusion",
+            "Cls Head", "Output", "FC"
         }
 
         if label in protected:
-            return label
+            return self._balance_parentheses(label)
 
         if len(label) <= max_chars:
-            return label
+            return self._balance_parentheses(label)
 
-        words = label.split()
-        if len(words) <= max_words:
-            return label
-
-        return " ".join(words[:max_words])
+        truncated = label[:max_chars].rsplit(' ', 1)[0]
+        return self._balance_parentheses(truncated) + "..."
     def _infer_kind_from_label(self, label: str) -> str:
         text = label.lower()
 

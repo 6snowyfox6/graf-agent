@@ -1165,23 +1165,25 @@ class InfographicRenderer:
         clip_id = f"clip_{job_id}"
         parts.append(f'  <defs><clipPath id="{clip_id}"><rect x="{card_x}" y="{y}" width="{card_w}" height="{card_h}" rx="12"/></clipPath></defs>')
         
+        title = str(section.get("title", "")) or str(diagram.get("title", ""))
+        
         img_y = y + 20
         img_h = card_h - 40
         
+        if title:
+            img_y = y + 50
+            img_h = card_h - 60
+            parts.append(
+                f'  <text x="{card_x + card_w/2}" y="{y + 32}" '
+                f'font-family="Arial, Helvetica, sans-serif" font-size="18" font-weight="bold" '
+                f'fill="{colors["text"]}" text-anchor="middle">{self._escape(title)}</text>'
+            )
+            
         parts.append(
             f'  <image href="{img_url}" x="{card_x+10}" y="{img_y}" width="{card_w-20}" height="{img_h}" '
             f'preserveAspectRatio="xMidYMid meet" clip-path="url(#{clip_id})"/>'
         )
         
-        title = str(section.get("title", "")) or str(diagram.get("title", ""))
-        if title:
-            parts.append(
-                f'  <rect x="{card_x}" y="{y + card_h - 40}" width="{card_w}" height="40" fill="#000000" fill-opacity="0.6"/>'
-                f'  <text x="{card_x + 16}" y="{y + card_h - 14}" '
-                f'font-family="Arial, Helvetica, sans-serif" font-size="16" font-weight="bold" '
-                f'fill="#ffffff">{self._escape(title)}</text>'
-            )
-            
         return "\n".join(parts), y + card_h + 20
 
     # ------------------------------------------------------------------
