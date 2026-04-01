@@ -37,7 +37,7 @@
     "не используй nodes и edges",
     "используй массив sections с типизированными секциями",
     "допустимые типы секций: stat, text_block, comparison, steps, timeline, donut_chart, gauge, tags, process, image, neural_network",
-    "для neural_network создай внутри поле diagram с полями nodes (массив с id, label, kind) и edges (массив с source, target)",
+    "для neural_network создай внутри поле diagram с полями nodes (массив с id, label, kind, где kind один из: input, conv, pool, block, fc, sum, concat, mul, output) и edges (массив с source, target)",
     "stat — одна ключевая метрика: value (число или процент), label (название), icon (опционально, варианты: chart, users, money, time, star, arrow-up, check, gear, lightning, globe, shield, smartphone, heart)",
     "text_block — блок текста: title (заголовок), content (текст)",
     "comparison — горизонтальный столбчатый график: title (опционально), items — массив объектов {label, value}",

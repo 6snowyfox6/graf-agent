@@ -3,14 +3,14 @@ from __future__ import annotations
 import re
 import shutil
 import subprocess
+import json
 from pathlib import Path
 from textwrap import dedent
 from typing import Any
-
+import graphviz
 
 class PlotNeuralNetRenderError(RuntimeError):
     pass
-
 
 class PlotNeuralNetRenderer:
     """
@@ -50,6 +50,10 @@ class PlotNeuralNetRenderer:
 
         self.latex_command = latex_command
 
+        # Заполняется при вызове build_tex
+        self._depth_map: dict[str, int] = {}
+        self._layout: str = "linear"
+
     def render(self, diagram: dict[str, Any], output_name: str = "diagram") -> dict[str, str]:
         self._validate_environment()
         self._validate_diagram(diagram)
@@ -82,15 +86,14 @@ class PlotNeuralNetRenderer:
         edges = diagram.get("edges", [])
 
         mapped_nodes = [self._map_node(node, i) for i, node in enumerate(nodes)]
-        ordered_nodes = self._topological_fallback_order(mapped_nodes, edges)
+        self._layout = diagram.get("layout", "linear")
+        ordered_nodes = self._compute_layout(mapped_nodes, edges, self._layout)
 
         node_blocks: list[str] = []
         edge_blocks: list[str] = []
-        placed_ids: list[str] = []
 
         for i, node in enumerate(ordered_nodes):
-            node_blocks.append(self._build_node_tex(node, i, placed_ids))
-            placed_ids.append(node["id"])
+            node_blocks.append(self._build_node_tex(node, i))
 
         valid_ids = {n["id"] for n in ordered_nodes}
         for edge in edges:
@@ -100,7 +103,7 @@ class PlotNeuralNetRenderer:
                 edge_blocks.append(self._build_edge_tex(source, target))
 
         tex = f"""
-\\documentclass[border=8pt, multi, tikz]{{standalone}}
+\\documentclass[border=15pt, multi, tikz]{{standalone}}
 \\usepackage[T2A]{{fontenc}}
 \\usepackage[utf8]{{inputenc}}
 \\usepackage[russian,english]{{babel}}
@@ -112,17 +115,19 @@ class PlotNeuralNetRenderer:
 \\begin{{document}}
 \\begin{{tikzpicture}}
 \\tikzstyle{{connection}}=[ultra thick,every node/.style={{sloped,allow upside down}},draw=black!70,opacity=0.7]
+\\tikzstyle{{skip}}=[ultra thick,every node/.style={{sloped,allow upside down}},draw=black!40,densely dashed,opacity=0.6]
 
 {chr(10).join(node_blocks)}
 
 {chr(10).join(edge_blocks)}
-
-{f"\\\\node[above=8mm, align=center] at (current bounding box.north) {{{{\\\\Large\\\\bfseries\\\\sffamily {self._escape_latex(title)}}}}};" if title else ""}
-
-\\end{{tikzpicture}}
-\\end{{document}}
 """
+        if title:
+            tex += f"\\node[above=1.5cm, align=center] at (current bounding box.north) {{\\Large\\bfseries\\sffamily {self._escape_latex(title)}}};\n"
+
+        tex += "\\end{tikzpicture}\n\\end{document}\n"
         return dedent(tex)
+
+    # ─────────────────────── validation ───────────────────────
 
     def _validate_environment(self) -> None:
         if not self.plotneuralnet_root.exists():
@@ -162,6 +167,8 @@ class PlotNeuralNetRenderer:
         if not isinstance(edges, list):
             raise PlotNeuralNetRenderError("diagram['edges'] должен быть списком")
 
+    # ─────────────────────── node mapping ───────────────────────
+
     def _map_node(self, node: dict[str, Any], index: int) -> dict[str, Any]:
         node_id = self._sanitize_id(str(node.get("id", f"layer_{index}")))
 
@@ -174,36 +181,164 @@ class PlotNeuralNetRenderer:
         if not kind:
             kind = self._infer_kind_from_label(label)
 
-        block = {
+        block: dict[str, Any] = {
             "id": node_id,
             "label": label,
             "kind": kind,
-            "width": 2.0,
-            "height": 24,
-            "depth": 24,
-            "fill": "yellow",
         }
 
+        # ── Размеры блоков уменьшены для компактности ──
         if kind == "input":
-            block.update(width=2.0, height=32, depth=32, fill="green")
-        elif kind == "conv":
-            block.update(width=3.4, height=26, depth=26, fill="yellow")
-        elif kind == "pool":
-            block.update(width=1.8, height=20, depth=20, fill="red")
-        elif kind == "block":
-            block.update(width=3.8, height=24, depth=24, fill="blue")
-        elif kind == "fc":
-            block.update(width=2.6, height=16, depth=16, fill="cyan")
+            block.update(macro="Box", params={"width": 1.5, "height": 20, "depth": 20, "fill": "green"})
+        elif kind in ["conv", "cnn"]:
+            block.update(macro="RightBandedBox", params={"width": "{1.5}", "height": 17, "depth": 17, "fill": "yellow", "bandfill": "orange"})
+        elif kind in ["pool", "maxpool", "avgpool"]:
+            block.update(macro="Box", params={"width": 1.2, "height": 14, "depth": 14, "fill": "red", "opacity": 0.5})
+        elif kind in ["fc", "dense", "linear"]:
+            block.update(macro="Box", params={"width": 1.5, "height": 8, "depth": 8, "fill": "cyan"})
+        elif kind in ["sum", "add", "concat", "mul", "dot"]:
+            logo_map = {"sum": "$+$", "add": "$+$", "concat": "©", "mul": "$\\times$", "dot": "$\\circ$"}
+            block.update(macro="Ball", params={"radius": 1.5, "fill": "green", "logo": logo_map.get(kind, "$+$")})
         elif kind == "output":
-            block.update(width=2.0, height=14, depth=14, fill="magenta")
+            block.update(macro="Box", params={"width": 1.5, "height": 10, "depth": 10, "fill": "magenta"})
+        else:
+            block.update(macro="Box", params={"width": 2.5, "height": 16, "depth": 16, "fill": "blue"})
 
+        # Разрешаем переопределять из JSON
         for key in ("width", "height", "depth", "fill"):
             if key in node:
-                block[key] = node[key]
+                block["params"][key] = node[key]
 
         return block
+
+    # ─────────────────────── layout ───────────────────────
+
+    def _compute_layout(
+        self,
+        nodes: list[dict[str, Any]],
+        edges: list[dict[str, Any]],
+        layout: str = "linear",
+    ) -> list[dict[str, Any]]:
+        if not nodes:
+            return nodes
+
+        # ── Топологическая глубина ──
+        out_edges: dict[str, list[str]] = {n["id"]: [] for n in nodes}
+        in_edges: dict[str, list[str]] = {n["id"]: [] for n in nodes}
+        for e in edges:
+            u = self._sanitize_id(str(e.get("source", "")))
+            v = self._sanitize_id(str(e.get("target", "")))
+            if u in out_edges and v in out_edges:
+                out_edges[u].append(v)
+                in_edges[v].append(u)
+
+        depth: dict[str, int] = {n["id"]: 0 for n in nodes}
+        changed = True
+        while changed:
+            changed = False
+            for u in depth:
+                for v in out_edges[u]:
+                    if depth[v] < depth[u] + 1:
+                        depth[v] = depth[u] + 1
+                        changed = True
+
+        self._depth_map = depth
+
+        # ── Graphviz layout ──
+        dot = graphviz.Digraph(engine="dot")
+
+        if layout == "u_shape":
+            dot.attr(rankdir='LR', ranksep='1.0', nodesep='0.8')
+        else:
+            dot.attr(rankdir='LR', ranksep='0.8', nodesep='0.6')
+
+        for n in nodes:
+            dot.node(n["id"], shape="box", width="1.0", height="1.0")
+
+        valid_ids = {n["id"] for n in nodes}
+        for e in edges:
+            s_id = self._sanitize_id(str(e.get("source", "")))
+            t_id = self._sanitize_id(str(e.get("target", "")))
+            if s_id in valid_ids and t_id in valid_ids:
+                if depth[t_id] - depth[s_id] > 1:
+                    # Skip-connections не влияют на layout engine
+                    dot.edge(s_id, t_id, constraint="false")
+                else:
+                    dot.edge(s_id, t_id)
+
+        try:
+            out = dot.pipe(format="json").decode("utf-8")
+            data = json.loads(out)
+        except Exception:
+            for i, n in enumerate(nodes):
+                n["x"] = i * 3.0
+                n["y"] = 0.0
+            return nodes
+
+        pos_map: dict[str, tuple[float, float]] = {}
+        for obj in data.get("objects", []):
+            name = obj.get("name")
+            pos_str = obj.get("pos", "0,0")
+            if pos_str and not pos_str.startswith("e,"):
+                try:
+                    px, py = map(float, pos_str.replace("e,", "").split(","))
+                    pos_map[name] = (px / 25.0, py / 25.0)
+                except ValueError:
+                    pass
+
+        # ── U-морфинг: края ВВЕРХ, центр ВНИЗ ──
+        if layout == "u_shape" and pos_map:
+            xs = [p[0] for p in pos_map.values()]
+            min_x, max_x = min(xs), max(xs)
+            center_x = (min_x + max_x) / 2.0
+
+            U_FACTOR = 0.55
+            for name, (px, py) in pos_map.items():
+                # Минус: чем ближе к центру, тем ниже. Края поднимаются.
+                morph_y = py - abs(px - center_x) * U_FACTOR
+                pos_map[name] = (px, morph_y)
+
+        for n in nodes:
+            x, y = pos_map.get(n["id"], (0.0, 0.0))
+            n["x"] = x
+            n["y"] = y
+
+        return nodes
+
+    # ─────────────────────── label processing ───────────────────────
+
+    def _normalize_label(self, label: str | None) -> str:
+        if label is None:
+            return "Block"
+
+        text = str(label).strip()
+        if not text:
+            return "Block"
+
+        replacements = {
+            "Input Layer": "Input",
+            "Initial Convolutional Layers": "Conv Stem",
+            "Initial Conv Layers": "Conv Stem",
+            "Initial Convolution": "Conv Stem",
+            "Stem": "Conv Stem",
+            "Stacked CNN": "CNN Blocks",
+            "CNN Layers": "CNN Blocks",
+            "Conv Layers": "CNN Blocks",
+            "Transformer Encoder": "Transformer Blocks",
+            "Transformer Encoder Blocks": "Transformer Blocks",
+            "Transformer Layers": "Transformer Blocks",
+            "Feature Fusion": "Fusion",
+            "Feature Fusion Module": "Fusion",
+            "Feature Fusion Layer": "Fusion",
+            "Classification Head": "Cls Head",
+            "Classifier Head": "Cls Head",
+            "Output Layer": "Output",
+            "Output (Softmax)": "Output"
+        }
+
+        return replacements.get(text, text)
+
     def _balance_parentheses(self, text: str) -> str:
-        # Восстанавливаем закрывающие дуги, если модель их случайно обрезала
         opened = text.count('(')
         closed = text.count(')')
         if opened > closed:
@@ -232,6 +367,7 @@ class PlotNeuralNetRenderer:
 
         truncated = label[:max_chars].rsplit(' ', 1)[0]
         return self._balance_parentheses(truncated) + "..."
+
     def _infer_kind_from_label(self, label: str) -> str:
         text = label.lower()
 
@@ -264,112 +400,50 @@ class PlotNeuralNetRenderer:
 
         return "block"
 
-    def _topological_fallback_order(
-        self,
-        nodes: list[dict[str, Any]],
-        edges: list[dict[str, Any]],
-    ) -> list[dict[str, Any]]:
-        if not edges:
-            return nodes
+    # ─────────────────────── TeX generation ───────────────────────
 
-        id_to_node = {n["id"]: n for n in nodes}
-        incoming = {n["id"]: 0 for n in nodes}
-        outgoing = {n["id"]: [] for n in nodes}
-
-        for edge in edges:
-            s = self._sanitize_id(str(edge.get("source", "")))
-            t = self._sanitize_id(str(edge.get("target", "")))
-            if s in id_to_node and t in id_to_node:
-                outgoing[s].append(t)
-                incoming[t] += 1
-
-        starts = [nid for nid, deg in incoming.items() if deg == 0]
-        if len(starts) != 1:
-            return nodes
-
-        ordered: list[dict[str, Any]] = []
-        current = starts[0]
-        visited = set()
-
-        while current and current not in visited:
-            visited.add(current)
-            ordered.append(id_to_node[current])
-            next_nodes = outgoing.get(current, [])
-            if len(next_nodes) != 1:
-                break
-            current = next_nodes[0]
-
-        if len(ordered) == len(nodes):
-            return ordered
-
-        return nodes
-    def _normalize_label(self, label: str | None) -> str:
-        if label is None:
-            return "Block"
-
-        text = str(label).strip()
-        if not text:
-            return "Block"
-
-        replacements = {
-            "Input Layer": "Input",
-            "Initial Convolutional Layers": "Conv Stem",
-            "Initial Conv Layers": "Conv Stem",
-            "Initial Convolution": "Conv Stem",
-            "Stem": "Conv Stem",
-            "Stacked CNN": "CNN Blocks",
-            "CNN Layers": "CNN Blocks",
-            "Conv Layers": "CNN Blocks",
-            "Transformer Encoder": "Transformer Blocks",
-            "Transformer Encoder Blocks": "Transformer Blocks",
-            "Transformer Layers": "Transformer Blocks",
-            "Feature Fusion": "Fusion",
-            "Feature Fusion Module": "Fusion",
-            "Feature Fusion Layer": "Fusion",
-            "Classification Head": "Cls Head",
-            "Classifier Head": "Cls Head",
-            "Output Layer": "Output",
-            "Output (Softmax)": "Output"
-        }
-
-        return replacements.get(text, text)
-    def _build_node_tex(self, node: dict[str, Any], index: int, placed_ids: list[str]) -> str:
+    def _build_node_tex(self, node: dict[str, Any], index: int) -> str:
         name = node["id"]
         caption = self._escape_latex(node["label"])
-        fill = node["fill"]
-        width = node["width"]
-        height = node["height"]
-        depth = node["depth"]    
-        if index == 0:
-            return f"""
-\\pic[shift={{(0,0,0)}}] at (0,0,0)
-    {{Box={{
-        name={name},
-        caption={{{caption}}},
-        fill={fill},
-        height={height},
-        width={width},
-        depth={depth}
-    }}}};
-""".strip()
+        macro = node.get("macro", "Box")
+        params = node.get("params", {})
 
-        prev = placed_ids[-1]
-        return f"""
-\\pic[shift={{(2.2,0,0)}}] at ({prev}-east)
-    {{Box={{
-        name={name},
-        caption={{{caption}}},
-        fill={fill},
-        height={height},
-        width={width},
-        depth={depth}
-    }}}};
-""".strip()
+        params_str = f"name={name}, caption={{{caption}}}"
+        for k, v in params.items():
+            if k == "xlabel":
+                params_str += f", {k}={{{v}}}"
+            else:
+                params_str += f", {k}={v}"
+
+        x = node.get("x", index * 3.0)
+        y = node.get("y", 0.0)
+
+        return f"""\
+\\pic[shift={{({x:.2f},{y:.2f},0)}}] at (0,0,0)
+    {{{macro}={{
+        {params_str}
+    }}}};"""
 
     def _build_edge_tex(self, source: str, target: str) -> str:
-        return f"""
-\\draw [connection] ({source}-east) -- node {{\\midarrow}} ({target}-west);
-""".strip()
+        s_depth = self._depth_map.get(source, 0)
+        t_depth = self._depth_map.get(target, 0)
+        gap = t_depth - s_depth
+
+        if gap <= 1:
+            # Обычное прямое соединение (соседние блоки)
+            return f"\\draw [connection] ({source}-east) -- node {{\\midarrow}} ({target}-west);"
+
+        # Skip-connection: polyline path СВЕРХУ блоков (не дуга — избегаем TikZ "Dimension too large")
+        # Рисуем: source-north → вверх на lift → горизонтально → вниз к target-north
+        lift = 1.5 + gap * 0.6  # чем длиннее прыжок, тем выше дуга
+        return (
+            f"\\draw [skip] ({source}-north) -- "
+            f"++(0,{lift:.1f},0) -| "
+            f"node[pos=0.25] {{\\midarrow}} "
+            f"({target}-north);"
+        )
+
+    # ─────────────────────── compilation ───────────────────────
 
     def _compile_tex(self, tex_path: Path) -> None:
         cmd = [
@@ -394,6 +468,8 @@ class PlotNeuralNetRenderer:
                 f"STDOUT:\n{out_str}\n\n"
                 f"STDERR:\n{err_str}"
             )
+
+    # ─────────────────────── utils ───────────────────────
 
     def _sanitize_id(self, value: str) -> str:
         value = value.lower().strip()

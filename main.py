@@ -6,6 +6,7 @@ import re
 import time
 from pathlib import Path
 import requests
+from typing import Any
 
 from plotneuralnet_renderer import PlotNeuralNetRenderer
 from infographic_renderer import InfographicRenderer
@@ -1366,11 +1367,12 @@ def generate_diagram(user_task: str, reference_description: dict | str | None = 
             '  "title": "string",\n'
             f'  "layout_hint": "{layout_hint}",\n'
             f'  "renderer": "{config.get("renderer", "general")}",\n'
+            '  "layout": "linear|u_shape",\n'
             '  "nodes": [\n'
             '    {\n'
             '      "id": "string",\n'
             '      "label": "string",\n'
-            '      "kind": "input|conv|pool|block|fc|output"\n'
+            '      "kind": "input|conv|pool|block|fc|sum|concat|mul|output"\n'
             '    }\n'
             '  ],\n'
             '  "edges": [\n'
@@ -1464,18 +1466,14 @@ def main():
     3. tags с ключевыми понятиями SHAP (Game Theory, Feature Importance, Local/Global Explanation).
     """
 
-    # Промпт из обновления (ResNet-50)
-    prompt_resnet = """
-Нарисуй архитектуру модели ResNet-50.
-Покажи основные блоки: вход, начальную свёртку, residual-блоки по стадиям, global average pooling и классификатор.
-Схема должна быть компактной, 6-8 блоков максимум.
+    # Промпт для U-Net (нелинейный граф)
+    prompt_unet = """
+Нарисуй архитектуру U-Net для сегментации.
+Отрази Encoder-путь (вниз), Bottleneck и Decoder-путь (вверх).
+Обязательно добавь skip-connections (пробросы активаций) из энкодера в декодер и покажи операции Concat.
 """
 
-    user_task = prompt_shap
-    # user_task = prompt_resnet
-
-    
-
+    user_task = prompt_unet
 
     # Референсы теперь пустые по умолчанию. Скрипт будет подтягивать 
     # только те файлы, что лежат в папке references/ (если они там есть).
