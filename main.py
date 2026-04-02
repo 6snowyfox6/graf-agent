@@ -8,7 +8,7 @@ from pathlib import Path
 import requests
 from typing import Any
 
-from plotneuralnet_renderer import PlotNeuralNetRenderer
+from plotneuralnet_renderer import PlotNeuralNetRenderer, build_model_renderer
 from infographic_renderer import InfographicRenderer
 from graphviz import Digraph
 
@@ -1026,7 +1026,7 @@ def render_diagram(diagram: dict, output_name: str = "diagram"):
     layout_hint = diagram.get("layout_hint", "")
 
     if renderer == "plotneuralnet" or layout_hint == "model_architecture":
-        plot_renderer = PlotNeuralNetRenderer(project_root=".")
+        plot_renderer = build_model_renderer(diagram, project_root=".")
         return plot_renderer.render(diagram, output_name=output_name)
 
     if renderer == "infographic" or layout_hint == "infographic":
@@ -1455,25 +1455,14 @@ def generate_diagram(user_task: str, reference_description: dict | str | None = 
 
 def main():
 
-    # Проверим работу с SHAP (локальный тест)
-    prompt_shap = """
-    Сделай инфографику про интеграцию SHAP (SHapley Additive exPlanations) в пайплайн оценки модели.
-    Цветовая схема: 'dark'.
-    Структура:
-    1. text_block "Зачем нужен SHAP?".
-    2. neural_network с архитектурой пайплайна: 
-    Узлы: Входные фичи (input) -> Предобработка (conv) -> Machine Learning Model (block) -> SHAP Explainer (fc) -> Вывод важности фичей (output).
-    3. tags с ключевыми понятиями SHAP (Game Theory, Feature Importance, Local/Global Explanation).
-    """
-
-    # Промпт для U-Net (нелинейный граф)
-    prompt_unet = """
-Нарисуй архитектуру U-Net для сегментации.
-Отрази Encoder-путь (вниз), Bottleneck и Decoder-путь (вверх).
-Обязательно добавь skip-connections (пробросы активаций) из энкодера в декодер и покажи операции Concat.
-"""
-
-    user_task = prompt_unet
+    user_task = """Сгенерируй детальную архитектуру Generative Adversarial Network (GAN). 
+Используй "layout": "linear".
+В сети должно быть два начала:
+1. Вектор шума ("Random Noise Z"), который подается в "Generator" (внутри покажи пару слоев, например "Dense", "Reshape", "UpConv", "Fake Image").
+2. Вход с реальными данными ("Real Image").
+И "Fake Image", и "Real Image" подаются на вход в один общий "Discriminator" (внутри покажи слои "Conv", "LeakyReLU", "Flatten", "Dense").
+На выходе дискриминатора должен быть "Real/Fake Prediction" (вероятность того, настоящее ли изображение).
+Особое внимание удели тому, чтобы генератор и дискриминатор были визуально разделены, но логично сходились в зоне классификации."""
 
     # Референсы теперь пустые по умолчанию. Скрипт будет подтягивать 
     # только те файлы, что лежат в папке references/ (если они там есть).
