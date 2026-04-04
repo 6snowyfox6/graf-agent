@@ -9,6 +9,13 @@
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
 MODEL_PATH="$DIR/../models/Qwen2.5-7B-Instruct-Q4_K_M.gguf"
+CUDA_DIR="/usr/local/cuda-12.8"
+
+if [ -d "$CUDA_DIR" ]; then
+    export CUDA_HOME="$CUDA_DIR"
+    export PATH="$CUDA_DIR/bin:$PATH"
+    export LD_LIBRARY_PATH="$CUDA_DIR/lib64:${LD_LIBRARY_PATH:-}"
+fi
 
 if [ ! -f "$MODEL_PATH" ]; then
     echo "Модель не найдена по пути: $MODEL_PATH"

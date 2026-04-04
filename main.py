@@ -1427,8 +1427,7 @@ def generate_diagram(user_task: str, reference_description: dict | str | None = 
 
             candidate = clean_diagram_labels(candidate)
 
-            score = score_general_candidate(
-                candidate) if layout_hint == "general" else 0
+            score = score_general_candidate(candidate) if layout_hint == "general" else 0
             print(f"[GEN SCORE #{attempt + 1}] {score}")
 
             if score > best_score:
@@ -1455,14 +1454,24 @@ def generate_diagram(user_task: str, reference_description: dict | str | None = 
 
 def main():
 
-    user_task = """Сгенерируй детальную архитектуру Generative Adversarial Network (GAN). 
-Используй "layout": "linear".
-В сети должно быть два начала:
-1. Вектор шума ("Random Noise Z"), который подается в "Generator" (внутри покажи пару слоев, например "Dense", "Reshape", "UpConv", "Fake Image").
-2. Вход с реальными данными ("Real Image").
-И "Fake Image", и "Real Image" подаются на вход в один общий "Discriminator" (внутри покажи слои "Conv", "LeakyReLU", "Flatten", "Dense").
-На выходе дискриминатора должен быть "Real/Fake Prediction" (вероятность того, настоящее ли изображение).
-Особое внимание удели тому, чтобы генератор и дискриминатор были визуально разделены, но логично сходились в зоне классификации."""
+    user_task = """Сгенерируй детальную архитектуру Vision Transformer (ViT-B/16) для классификации изображений в стиле model_architecture.
+
+Требования:
+- renderer: plotneuralnet
+- layout: linear
+- python_backend: on
+- Покажи полный поток:
+  1) Input Image 224x224x3
+  2) Patch Embedding (patch size 16, projection to 768)
+  3) Positional Encoding + [CLS] token
+  4) Encoder stack: 12 Transformer blocks (каждый: MSA -> Add&Norm -> MLP -> Add&Norm)
+  5) Final LayerNorm
+  6) MLP Head
+  7) Output Classes (1000)
+- Отдельно визуально выдели повторяющийся Transformer block и подпиши “x12”.
+- Сделай читаемые короткие подписи без наложений.
+- Сохрани 3D-стиль PlotNeuralNet, аккуратные стрелки слева направо.
+- Верни только валидный JSON без markdown."""
 
     # Референсы теперь пустые по умолчанию. Скрипт будет подтягивать 
     # только те файлы, что лежат в папке references/ (если они там есть).

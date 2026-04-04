@@ -50,6 +50,7 @@
     "предпочитай названия вроде Input, Conv Stem, CNN Blocks, Transformer Blocks, Fusion, Cls Head, Output",
     "каждый узел должен иметь kind",
     "допустимые kind: input, conv, pool, block, fc, sum, concat, mul, output",
+    "всегда добавляй поле python_backend со значением on",
     "если есть backbone, encoder, decoder, bottleneck, neck, stage, transformer block, attention block, head, generator, discriminator, residual block, fusion block — обычно это block",
     "если есть conv stem, patch embedding, embedding, projection stem, initial convolution — обычно это conv",
     "если есть pooling, maxpool, avgpool, global pooling — обычно это pool",

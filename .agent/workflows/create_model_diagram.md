@@ -13,3 +13,7 @@ description: Generate and improve a model architecture diagram without breaking 
 5. If labels are too long, improve normalization before touching prompt rules
 6. Keep output compact and article-like
 7. Do not break `general` or `pipeline` rendering
+8. Update `.agent/workflows/handoff_log.md` with:
+   - what changed
+   - which outputs were regenerated
+   - known issues and next recommended step

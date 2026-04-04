@@ -19,3 +19,4 @@ description: Improve PlotNeuralNet output quality safely
 4. Avoid replacing unknown labels with generic `Block` unless empty
 5. Re-run syntax checks
 6. Summarize exactly what changed
+7. Write a short handoff entry in `.agent/workflows/handoff_log.md`

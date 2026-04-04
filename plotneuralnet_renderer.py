@@ -85,8 +85,34 @@ class PlotNeuralNetRenderer:
         pdf_path = work_dir / f"{safe_name}.pdf"
         preview_path = work_dir / f"{safe_name}.png"
 
-        tex_content = self.build_tex(diagram)
-        tex_path.write_text(tex_content, encoding="utf-8")
+        contract = str(diagram.get("render_contract", "") or "").strip().lower()
+        python_backend_mode = str(diagram.get("python_backend", "auto")).strip().lower()
+        python_backend_enabled = python_backend_mode not in {"off", "false", "0", "no"}
+
+        if contract == "canonical_unet":
+            self._render_canonical_unet_via_python(diagram, safe_name, work_dir, tex_path)
+        elif contract == "canonical_resnet":
+            self._render_canonical_resnet_via_python(diagram, safe_name, work_dir, tex_path)
+        elif contract == "canonical_yolo":
+            self._render_canonical_yolo_via_python(diagram, safe_name, work_dir, tex_path)
+        elif python_backend_enabled:
+            try:
+                if self._looks_like_yolo(diagram):
+                    self._render_canonical_yolo_via_python(diagram, safe_name, work_dir, tex_path)
+                elif self._looks_like_resnet(diagram):
+                    self._render_canonical_resnet_via_python(diagram, safe_name, work_dir, tex_path)
+                else:
+                    self._render_generic_via_python_script(diagram, safe_name, work_dir, tex_path)
+            except PlotNeuralNetRenderError as exc:
+                self._warnings.append(
+                    "Python backend failed, fallback to direct TeX backend: "
+                    + str(exc).splitlines()[0]
+                )
+                tex_content = self.build_tex(diagram)
+                tex_path.write_text(tex_content, encoding="utf-8")
+        else:
+            tex_content = self.build_tex(diagram)
+            tex_path.write_text(tex_content, encoding="utf-8")
 
         self._compile_tex(tex_path)
         generated_preview = self._generate_preview(pdf_path, preview_path)
@@ -104,6 +130,613 @@ class PlotNeuralNetRenderer:
         if generated_preview is not None:
             result["preview_path"] = str(generated_preview)
         return result
+
+    def _render_generic_via_python_script(
+        self,
+        diagram: dict[str, Any],
+        safe_name: str,
+        work_dir: Path,
+        tex_path: Path,
+    ) -> None:
+        raw_nodes = diagram.get("nodes", [])
+        raw_edges = diagram.get("edges", [])
+        self._layout = diagram.get("layout", "linear")
+
+        mapped_nodes = self._prepare_nodes(raw_nodes)
+        edges = self._normalize_edges(raw_edges, {node["id"] for node in mapped_nodes})
+        ordered_nodes = self._compute_layout(mapped_nodes, edges, self._layout)
+
+        node_blocks: list[str] = []
+        for i, node in enumerate(ordered_nodes):
+            node_blocks.append(self._build_node_tex(node, i))
+
+        self._node_position_map = {
+            node["id"]: (float(node.get("x", i * 3.0)), float(node.get("y", 0.0)))
+            for i, node in enumerate(ordered_nodes)
+        }
+
+        edge_blocks: list[str] = []
+        valid_ids = {n["id"] for n in ordered_nodes}
+        for edge in edges:
+            source = self._sanitize_id(str(edge.get("source", "")))
+            target = self._sanitize_id(str(edge.get("target", "")))
+            if source in valid_ids and target in valid_ids:
+                edge_blocks.append(self._build_edge_tex(source, target))
+
+        extra_blocks = self._build_extra_tex()
+        py_script_path = work_dir / f"{safe_name}_gen.py"
+        script = self._build_generic_python_script(
+            output_tex_name=tex_path.name,
+            title=self._balance_parentheses(diagram.get("title", "")),
+            node_blocks=node_blocks,
+            edge_blocks=edge_blocks,
+            extra_blocks=extra_blocks,
+            plot_root=self.plotneuralnet_root,
+        )
+        py_script_path.write_text(script, encoding="utf-8")
+
+        result = subprocess.run(
+            ["python3", py_script_path.name],
+            cwd=work_dir,
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode != 0:
+            raise PlotNeuralNetRenderError(
+                "Generic python backend failed.\n"
+                f"STDOUT:\n{result.stdout}\n\nSTDERR:\n{result.stderr}"
+            )
+        if not tex_path.exists():
+            raise PlotNeuralNetRenderError(
+                f"Python backend did not generate TeX: {tex_path}"
+            )
+
+    def _build_generic_python_script(
+        self,
+        output_tex_name: str,
+        title: str,
+        node_blocks: list[str],
+        edge_blocks: list[str],
+        extra_blocks: str,
+        plot_root: Path,
+    ) -> str:
+        blocks: list[str] = []
+        blocks.extend(node_blocks)
+        blocks.extend(edge_blocks)
+        if extra_blocks.strip():
+            blocks.append(extra_blocks)
+        if title:
+            title_tex = self._escape_latex(title)
+            blocks.append(
+                "\\node[above=1.5cm, align=center] at (current bounding box.north) "
+                f"{{\\Large\\bfseries\\sffamily {title_tex}}};"
+            )
+
+        arch_entries = ",\n".join(repr(b) for b in blocks)
+        return (
+            "import sys\n"
+            f"sys.path.insert(0, {repr(str(plot_root))})\n"
+            "from pycore.tikzeng import to_head, to_cor, to_begin, to_end, to_generate\n\n"
+            "arch = [\n"
+            f"    to_head({repr(str(plot_root))}),\n"
+            "    to_cor(),\n"
+            "    to_begin(),\n"
+            f"{('    ' + arch_entries.replace('\\n', '\\n    ')) if arch_entries else ''}\n"
+            "    to_end(),\n"
+            "]\n\n"
+            "def main():\n"
+            f"    to_generate(arch, {repr(output_tex_name)})\n\n"
+            "if __name__ == '__main__':\n"
+            "    main()\n"
+        )
+
+    def _render_canonical_unet_via_python(
+        self,
+        diagram: dict[str, Any],
+        safe_name: str,
+        work_dir: Path,
+        tex_path: Path,
+    ) -> None:
+        plot_root = self.plotneuralnet_root
+        py_script_path = work_dir / f"{safe_name}_gen.py"
+        stage_count = self._infer_unet_stage_count(diagram)
+
+        script = self._build_unet_python_script(
+            output_tex_name=tex_path.name,
+            plot_root=plot_root,
+            stage_count=stage_count,
+        )
+        py_script_path.write_text(script, encoding="utf-8")
+
+        result = subprocess.run(
+            ["python3", py_script_path.name],
+            cwd=work_dir,
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode != 0:
+            raise PlotNeuralNetRenderError(
+                "Ошибка генерации TeX через PlotNeuralNet python backend.\n"
+                f"STDOUT:\n{result.stdout}\n\nSTDERR:\n{result.stderr}"
+            )
+        if not tex_path.exists():
+            raise PlotNeuralNetRenderError(
+                f"Python backend не сгенерировал TeX: {tex_path}"
+            )
+
+    def _looks_like_resnet(self, diagram: dict[str, Any]) -> bool:
+        title = str(diagram.get("title", "")).lower()
+        if "resnet" in title:
+            return True
+        for node in diagram.get("nodes", []):
+            text = f"{node.get('id', '')} {node.get('label', '')}".lower()
+            if "resnet" in text:
+                return True
+        return False
+
+    def _looks_like_yolo(self, diagram: dict[str, Any]) -> bool:
+        title = str(diagram.get("title", "")).lower()
+        if "yolo" in title:
+            return True
+        for node in diagram.get("nodes", []):
+            text = f"{node.get('id', '')} {node.get('label', '')}".lower()
+            if "yolo" in text:
+                return True
+        return False
+
+    def _infer_yolo_variant(self, diagram: dict[str, Any]) -> str:
+        corpus = [str(diagram.get("title", ""))]
+        for node in diagram.get("nodes", []):
+            corpus.append(str(node.get("id", "")))
+            corpus.append(str(node.get("label", "")))
+        text = " ".join(corpus).lower()
+        if "yolov3" in text or "yolo v3" in text:
+            return "v3"
+        if "yolov5" in text or "yolo v5" in text:
+            return "v5"
+        if "yolov8" in text or "yolo v8" in text:
+            return "v8"
+        return "v8"
+
+    def _infer_resnet_depth(self, diagram: dict[str, Any]) -> int:
+        corpus = [str(diagram.get("title", ""))]
+        for node in diagram.get("nodes", []):
+            corpus.append(str(node.get("id", "")))
+            corpus.append(str(node.get("label", "")))
+        text = " ".join(corpus).lower()
+        m = re.search(r"resnet[\s_-]?(18|34|50|101|152)", text)
+        if not m:
+            return 18
+        return int(m.group(1))
+
+    def _render_canonical_resnet_via_python(
+        self,
+        diagram: dict[str, Any],
+        safe_name: str,
+        work_dir: Path,
+        tex_path: Path,
+    ) -> None:
+        depth = self._infer_resnet_depth(diagram)
+        py_script_path = work_dir / f"{safe_name}_gen.py"
+        script = self._build_resnet_python_script(
+            output_tex_name=tex_path.name,
+            plot_root=self.plotneuralnet_root,
+            title=self._balance_parentheses(diagram.get("title", "")),
+            depth=depth,
+        )
+        py_script_path.write_text(script, encoding="utf-8")
+
+        result = subprocess.run(
+            ["python3", py_script_path.name],
+            cwd=work_dir,
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode != 0:
+            raise PlotNeuralNetRenderError(
+                "Ошибка генерации ResNet TeX через PlotNeuralNet python backend.\n"
+                f"STDOUT:\n{result.stdout}\n\nSTDERR:\n{result.stderr}"
+            )
+        if not tex_path.exists():
+            raise PlotNeuralNetRenderError(
+                f"ResNet python backend не сгенерировал TeX: {tex_path}"
+            )
+
+    def _build_resnet_python_script(
+        self,
+        output_tex_name: str,
+        plot_root: Path,
+        title: str,
+        depth: int,
+    ) -> str:
+        if depth == 18:
+            stage_blocks = [2, 2, 2, 2]
+            bottleneck = False
+        elif depth == 34:
+            stage_blocks = [3, 4, 6, 3]
+            bottleneck = False
+        elif depth == 50:
+            stage_blocks = [3, 4, 6, 3]
+            bottleneck = True
+        elif depth == 101:
+            stage_blocks = [3, 4, 23, 3]
+            bottleneck = True
+        elif depth == 152:
+            stage_blocks = [3, 8, 36, 3]
+            bottleneck = True
+        else:
+            stage_blocks = [2, 2, 2, 2]
+            bottleneck = False
+
+        channels = [64, 128, 256, 512]
+        bottleneck_expand = [256, 512, 1024, 2048]
+        spatial = [56, 28, 14, 7]
+        widths_basic = [2.8, 3.8, 5.0, 6.0]
+        widths_bneck = (1.0, 1.7, 2.6)
+        offsets = ["(2.0,0,0)", "(2.2,0,0)", "(2.4,0,0)", "(2.4,0,0)"]
+
+        lines: list[str] = [
+            "import sys",
+            f"sys.path.insert(0, {repr(str(plot_root))})",
+            "from pycore.tikzeng import *",
+            "",
+            "arch = [",
+            f"    to_head({repr(str(plot_root))}),",
+            "    to_cor(),",
+            "    to_begin(),",
+            "    to_Conv(name='stem', s_filer=224, n_filer=64, offset='(0,0,0)', to='(0,0,0)', width=3.2, height=64, depth=64, caption='Stem 7x7 s2'),",
+            "    to_Pool(name='pool0', offset='(0,0,0)', to='(stem-east)', width=1, height=56, depth=56, opacity=0.55, caption='MaxPool'),",
+            "    to_connection('stem', 'pool0'),",
+        ]
+
+        prev = "pool0"
+        if not bottleneck:
+            for stage_idx in range(4):
+                block_count = stage_blocks[stage_idx]
+                c = channels[stage_idx]
+                s = spatial[stage_idx]
+                w = widths_basic[stage_idx]
+                offset = offsets[stage_idx]
+                for block_idx in range(block_count):
+                    block_name = f"s{stage_idx + 1}_b{block_idx + 1}"
+                    caption = ""
+                    if block_idx == 0:
+                        caption = f"Stage {stage_idx + 2} x{block_count}"
+                    lines.append(
+                        "    to_ConvRes("
+                        f"name='{block_name}', s_filer={s}, n_filer={c}, "
+                        f"offset='{offset if block_idx == 0 else '(0.55,0,0)'}', "
+                        f"to='({prev}-east)', width={w:.1f}, height={max(8, s):d}, depth={max(8, s):d}, "
+                        "opacity=0.45"
+                        f"{', caption=' + repr(caption) if caption else ''}"
+                        "),"
+                    )
+                    lines.append(f"    to_connection('{prev}', '{block_name}'),")
+                    prev = block_name
+        else:
+            for stage_idx in range(4):
+                block_count = stage_blocks[stage_idx]
+                c_mid = channels[stage_idx]
+                c_out = bottleneck_expand[stage_idx]
+                s = spatial[stage_idx]
+                offset = offsets[stage_idx]
+                h = max(8, s)
+                d = max(8, s)
+
+                for block_idx in range(block_count):
+                    block_name = f"s{stage_idx + 1}_b{block_idx + 1}"
+                    conv1 = f"{block_name}_r"
+                    conv2 = f"{block_name}_3"
+                    conv3 = f"{block_name}_e"
+                    sum_name = f"{block_name}_sum"
+                    projection_name = f"{block_name}_proj"
+                    is_projection = block_idx == 0
+                    step = offset if block_idx == 0 else "(0.85,0,0)"
+                    caption = ""
+                    if block_idx == 0:
+                        caption = f"Bneck S{stage_idx + 2} x{block_count}"
+
+                    lines.append(
+                        "    to_Conv("
+                        f"name='{conv1}', s_filer={s}, n_filer={c_mid}, "
+                        f"offset='{step}', to='({prev}-east)', "
+                        f"width={widths_bneck[0]:.1f}, height={h}, depth={d}"
+                        f"{', caption=' + repr(caption) if caption else ''}"
+                        "),"
+                    )
+                    lines.append(f"    to_connection('{prev}', '{conv1}'),")
+
+                    lines.append(
+                        "    to_Conv("
+                        f"name='{conv2}', s_filer={s}, n_filer={c_mid}, "
+                        f"offset='(0.18,0,0)', to='({conv1}-east)', "
+                        f"width={widths_bneck[1]:.1f}, height={h}, depth={d}"
+                        "),"
+                    )
+                    lines.append(f"    to_connection('{conv1}', '{conv2}'),")
+
+                    lines.append(
+                        "    to_Conv("
+                        f"name='{conv3}', s_filer={s}, n_filer={c_out}, "
+                        f"offset='(0.18,0,0)', to='({conv2}-east)', "
+                        f"width={widths_bneck[2]:.1f}, height={h}, depth={d}"
+                        "),"
+                    )
+                    lines.append(f"    to_connection('{conv2}', '{conv3}'),")
+
+                    lines.append(
+                        "    to_Sum("
+                        f"name='{sum_name}', offset='(0.55,0,0)', to='({conv3}-east)', "
+                        "radius=1.9, opacity=0.6"
+                        "),"
+                    )
+                    lines.append(f"    to_connection('{conv3}', '{sum_name}'),")
+
+                    if is_projection:
+                        lines.append(
+                            "    to_Conv("
+                            f"name='{projection_name}', s_filer={s}, n_filer={c_out}, "
+                            f"offset='(0,1.35,0)', to='({prev}-east)', "
+                            "width=0.9, height=8, depth=8, caption='Proj'"
+                            "),"
+                        )
+                        lines.append(f"    to_connection('{prev}', '{projection_name}'),")
+                        lines.append(f"    to_connection('{projection_name}', '{sum_name}'),")
+                    else:
+                        lines.append(f"    to_connection('{prev}', '{sum_name}'),")
+
+                    prev = sum_name
+
+        lines.extend([
+            "    to_Pool(name='avg', offset='(1.2,0,0)', to='(%s-east)', width=1, height=6, depth=6, opacity=0.55, caption='Global AvgPool')," % prev,
+            "    to_connection('%s', 'avg')," % prev,
+            "    to_SoftMax(name='fc', s_filer=1000, offset='(1.2,0,0)', to='(avg-east)', width=1.8, height=8, depth=8, caption='FC-1000'),",
+            "    to_connection('avg', 'fc'),",
+        ])
+
+        if title:
+            title_block = (
+                "\\node[above=1.45cm, align=center] at (current bounding box.north) "
+                f"{{\\Large\\bfseries\\sffamily {self._escape_latex(title)}}};"
+            )
+            lines.append(f"    {repr(title_block)},")
+        lines.extend([
+            "    to_end(),",
+            "]",
+            "",
+            "def main():",
+            f"    to_generate(arch, {repr(output_tex_name)})",
+            "",
+            "if __name__ == '__main__':",
+            "    main()",
+            "",
+        ])
+        return "\n".join(lines)
+
+    def _render_canonical_yolo_via_python(
+        self,
+        diagram: dict[str, Any],
+        safe_name: str,
+        work_dir: Path,
+        tex_path: Path,
+    ) -> None:
+        variant = self._infer_yolo_variant(diagram)
+        py_script_path = work_dir / f"{safe_name}_gen.py"
+        script = self._build_yolo_python_script(
+            output_tex_name=tex_path.name,
+            plot_root=self.plotneuralnet_root,
+            title=self._balance_parentheses(diagram.get("title", "")),
+            variant=variant,
+        )
+        py_script_path.write_text(script, encoding="utf-8")
+
+        result = subprocess.run(
+            ["python3", py_script_path.name],
+            cwd=work_dir,
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode != 0:
+            raise PlotNeuralNetRenderError(
+                "Ошибка генерации YOLO TeX через PlotNeuralNet python backend.\n"
+                f"STDOUT:\n{result.stdout}\n\nSTDERR:\n{result.stderr}"
+            )
+        if not tex_path.exists():
+            raise PlotNeuralNetRenderError(
+                f"YOLO python backend не сгенерировал TeX: {tex_path}"
+            )
+
+    def _build_yolo_python_script(
+        self,
+        output_tex_name: str,
+        plot_root: Path,
+        title: str,
+        variant: str = "v8",
+    ) -> str:
+        if variant == "v3":
+            stage_caps = ["Darknet S3", "Darknet S4", "Darknet S5"]
+            neck_caps = ["FPN P3", "FPN P4", "FPN P5"]
+        elif variant == "v5":
+            stage_caps = ["C3 S3", "C3 S4", "C3 S5"]
+            neck_caps = ["PAN P3", "PAN P4", "PAN P5"]
+        else:
+            stage_caps = ["C2f S3", "C2f S4", "C2f S5"]
+            neck_caps = ["Neck P3", "Neck P4", "Neck P5"]
+
+        lines: list[str] = [
+            "import sys",
+            f"sys.path.insert(0, {repr(str(plot_root))})",
+            "from pycore.tikzeng import *",
+            "",
+            "arch = [",
+            f"    to_head({repr(str(plot_root))}),",
+            "    to_cor(),",
+            "    to_begin(),",
+            "    '\\\\def\\\\ConvColor{rgb:yellow,7;red,2.2;white,5.5}',",
+            "    to_Conv(name='input', s_filer=640, n_filer=3, offset='(0,0,0)', to='(0,0,0)', width=1.2, height=56, depth=56, caption='Input 640'),",
+            "    to_Conv(name='stem', s_filer=320, n_filer=32, offset='(1.2,0,0)', to='(input-east)', width=1.4, height=50, depth=50, caption='Stem'),",
+            "    to_connection('input', 'stem'),",
+            "    to_Conv(name='stage2', s_filer=160, n_filer=64, offset='(1.0,0,0)', to='(stem-east)', width=1.8, height=42, depth=42, caption='Stage2'),",
+            "    to_connection('stem', 'stage2'),",
+            f"    to_Conv(name='stage3', s_filer=80, n_filer=128, offset='(1.0,0,0)', to='(stage2-east)', width=2.2, height=32, depth=32, caption='{stage_caps[0]}'),",
+            "    to_connection('stage2', 'stage3'),",
+            f"    to_Conv(name='stage4', s_filer=40, n_filer=256, offset='(1.1,0,0)', to='(stage3-east)', width=2.6, height=24, depth=24, caption='{stage_caps[1]}'),",
+            "    to_connection('stage3', 'stage4'),",
+            f"    to_Conv(name='stage5', s_filer=20, n_filer=512, offset='(1.2,0,0)', to='(stage4-east)', width=3.0, height=18, depth=18, caption='{stage_caps[2]}'),",
+            "    to_connection('stage4', 'stage5'),",
+            "    '\\\\def\\\\ConvColor{rgb:blue,4.5;green,1.8;white,6}',",
+            f"    to_Conv(name='neck_p5', s_filer=20, n_filer=256, offset='(1.3,0,0)', to='(stage5-east)', width=2.1, height=18, depth=18, caption='{neck_caps[2]}'),",
+            "    to_connection('stage5', 'neck_p5'),",
+            f"    to_Conv(name='neck_p4', s_filer=40, n_filer=256, offset='(1.3,-3.0,0)', to='(neck_p5-east)', width=2.1, height=24, depth=24, caption='{neck_caps[1]}'),",
+            "    to_connection('neck_p5', 'neck_p4'),",
+            f"    to_Conv(name='neck_p3', s_filer=80, n_filer=128, offset='(1.3,-3.4,0)', to='(neck_p4-east)', width=2.0, height=30, depth=30, caption='{neck_caps[0]}'),",
+            "    to_connection('neck_p4', 'neck_p3'),",
+            "    '\\\\def\\\\ConvColor{rgb:yellow,5;red,6.2;white,4.5}',",
+            "    to_Conv(name='head_s', s_filer=80, n_filer=255, offset='(2.2,0,0)', to='(neck_p3-east)', width=1.7, height=22, depth=22, caption='Head S'),",
+            "    to_connection('neck_p3', 'head_s'),",
+            "    to_Conv(name='head_m', s_filer=40, n_filer=255, offset='(2.2,0,0)', to='(neck_p4-east)', width=1.7, height=18, depth=18, caption='Head M'),",
+            "    to_connection('neck_p4', 'head_m'),",
+            "    to_Conv(name='head_l', s_filer=20, n_filer=255, offset='(2.2,0,0)', to='(neck_p5-east)', width=1.7, height=14, depth=14, caption='Head L'),",
+            "    to_connection('neck_p5', 'head_l'),",
+            "    '\\\\def\\\\ConvColor{rgb:magenta,3.8;blue,2.2;white,5.8}',",
+            "    to_Conv(name='out_s', s_filer=1, n_filer=85, offset='(3.2,0,0)', to='(head_s-east)', width=1.2, height=11, depth=11, caption='Out S'),",
+            "    to_connection('head_s', 'out_s'),",
+            "    to_Conv(name='out_m', s_filer=1, n_filer=85, offset='(3.2,0,0)', to='(head_m-east)', width=1.2, height=10, depth=10, caption='Out M'),",
+            "    to_connection('head_m', 'out_m'),",
+            "    to_Conv(name='out_l', s_filer=1, n_filer=85, offset='(3.2,0,0)', to='(head_l-east)', width=1.2, height=9, depth=9, caption='Out L'),",
+            "    to_connection('head_l', 'out_l'),",
+        ]
+
+        if title:
+            title_block = (
+                "\\node[above=1.45cm, align=center] at (current bounding box.north) "
+                f"{{\\Large\\bfseries\\sffamily {self._escape_latex(title)}}};"
+            )
+            lines.append(f"    {repr(title_block)},")
+
+        lines.extend([
+            "    to_end(),",
+            "]",
+            "",
+            "def main():",
+            f"    to_generate(arch, {repr(output_tex_name)})",
+            "",
+            "if __name__ == '__main__':",
+            "    main()",
+            "",
+        ])
+        return "\n".join(lines)
+
+    def _infer_unet_stage_count(self, diagram: dict[str, Any]) -> int:
+        nodes = diagram.get("nodes", [])
+        max_idx = 0
+        enc_seen = 0
+        for node in nodes:
+            node_id = str(node.get("id", ""))
+            label = str(node.get("label", ""))
+            text = f"{node_id} {label}".lower()
+            if "enc" in text:
+                enc_seen += 1
+            m = re.search(r"enc[\s_-]?(\d+)", text)
+            if m:
+                max_idx = max(max_idx, int(m.group(1)))
+        if max_idx > 0:
+            return max(2, min(6, max_idx))
+        if enc_seen > 0:
+            return max(2, min(6, enc_seen))
+        return 4
+
+    def _build_unet_python_script(
+        self,
+        output_tex_name: str,
+        plot_root: Path,
+        stage_count: int,
+    ) -> str:
+        # Stage templates are aligned with PlotNeuralNet examples and scaled
+        # to keep article-like proportions for 2..6 levels.
+        channels = [64, 128, 256, 512, 768, 1024][:stage_count]
+        spatial = [40, 32, 25, 16, 12, 9][:stage_count]
+        widths = [2.5, 3.5, 4.5, 6.0, 6.8, 7.6][:stage_count]
+        bottleneck_size = max(8, int(spatial[-1] * 0.5))
+        bottleneck_width = min(9.0, widths[-1] + 2.0)
+        bottleneck_filters = channels[-1] * 2
+
+        enc_lines: list[str] = []
+        dec_lines: list[str] = []
+        skip_lines: list[str] = []
+
+        enc_lines.append(
+            "    to_ConvConvRelu(name='ccr_b1', s_filer=500, n_filer=(%d,%d), offset='(0,0,0)', to='(0,0,0)', width=(%.1f,%.1f), height=%d, depth=%d),"
+            % (channels[0], channels[0], widths[0], widths[0], spatial[0], spatial[0])
+        )
+        enc_lines.append(
+            "    to_Pool(name='pool_b1', offset='(0,0,0)', to='(ccr_b1-east)', width=1, height=%d, depth=%d, opacity=0.6),"
+            % (max(6, spatial[0] - int(spatial[0] * 0.22)), max(6, spatial[0] - int(spatial[0] * 0.22)))
+        )
+
+        for idx in range(2, stage_count + 1):
+            c = channels[idx - 1]
+            s = spatial[idx - 1]
+            w = widths[idx - 1]
+            enc_lines.append(
+                "    *block_2ConvPool(name='b%d', botton='pool_b%d', top='pool_b%d', s_filer=%d, n_filer=%d, offset='(1,0,0)', size=(%d,%d,%.1f), opacity=0.6),"
+                % (idx, idx - 1, idx, max(64, s * 8), c, s, s, w)
+            )
+
+        bottom_id = f"pool_b{stage_count}"
+        enc_last = f"ccr_b{stage_count}"
+        enc_lines.append(
+            "    to_ConvConvRelu(name='ccr_bn', s_filer=%d, n_filer=(%d,%d), offset='(2,0,0)', to='(%s-east)', width=(%.1f,%.1f), height=%d, depth=%d, caption='Bottleneck Conv'),"
+            % (max(32, bottleneck_size * 4), bottleneck_filters, bottleneck_filters, bottom_id, bottleneck_width, bottleneck_width, bottleneck_size, bottleneck_size)
+        )
+        enc_lines.append("    to_connection('%s', 'ccr_bn')," % bottom_id)
+
+        # Decoder path mirrors encoder with stage-aware unconv blocks.
+        prev_top = "ccr_bn"
+        un_idx = stage_count + 1
+        for stage in range(stage_count, 0, -1):
+            c = channels[stage - 1]
+            s = spatial[stage - 1]
+            w = widths[stage - 1]
+            name = f"b{un_idx}"
+            top = f"end_{name}"
+            dec_lines.append(
+                "    *block_Unconv(name='%s', botton='%s', top='%s', s_filer=%d, n_filer=%d, offset='(2.1,0,0)', size=(%d,%d,%.1f), opacity=0.6),"
+                % (name, prev_top, top, max(64, s * 8), c, s, s, max(2.5, w - 0.3))
+            )
+            skip_lines.append(
+                "    to_skip(of='ccr_b%d', to='ccr_res_%s', pos=1.25),"
+                % (stage, name)
+            )
+            prev_top = top
+            un_idx += 1
+
+        softmax_h = spatial[0]
+        dec_lines.append(
+            "    to_ConvSoftMax(name='soft1', s_filer=%d, offset='(0.75,0,0)', to='(%s-east)', width=1, height=%d, depth=%d, caption='SOFTMAX'),"
+            % (max(64, softmax_h * 8), prev_top, softmax_h, softmax_h)
+        )
+        dec_lines.append("    to_connection('%s', 'soft1')," % prev_top)
+
+        body = "\n".join(enc_lines + dec_lines + skip_lines)
+        return (
+            "import sys\n"
+            "from pathlib import Path\n"
+            f"sys.path.insert(0, {repr(str(plot_root))})\n"
+            "from pycore.tikzeng import *\n"
+            "from pycore.blocks import *\n\n"
+            "arch = [\n"
+            f"    to_head({repr(str(plot_root))}),\n"
+            "    to_cor(),\n"
+            "    to_begin(),\n"
+            f"{body}\n"
+            "    to_end(),\n"
+            "]\n\n"
+            "def main():\n"
+            f"    to_generate(arch, {repr(output_tex_name)})\n\n"
+            "if __name__ == '__main__':\n"
+            "    main()\n"
+        )
 
     def build_tex(self, diagram: dict[str, Any]) -> str:
         title = self._balance_parentheses(diagram.get("title", ""))
@@ -383,7 +1016,24 @@ class PlotNeuralNetRenderer:
             ordered_ids = self._topological_order(nodes, out_edges, in_edges)
             order_idx = {node_id: idx for idx, node_id in enumerate(ordered_ids)}
 
-            x_step = 1.95
+            # Адаптивный шаг: длинные подписи/широкие блоки требуют больше интервала.
+            max_block_width = 2.0
+            max_line_count = 1
+            for node in nodes:
+                params = node.get("params", {}) or {}
+                raw_w = params.get("width", 2.0)
+                try:
+                    width_val = float(str(raw_w).strip("{}"))
+                except (TypeError, ValueError):
+                    width_val = 2.0
+                max_block_width = max(max_block_width, width_val)
+                line_count = max(
+                    1,
+                    len([ln for ln in str(node.get("label", "")).splitlines() if ln.strip()]),
+                )
+                max_line_count = max(max_line_count, line_count)
+
+            x_step = max(1.95, min(3.40, 1.10 + max_block_width * 0.62 + (max_line_count - 1) * 0.12))
             x0 = 0.0
             for node in nodes:
                 node["x"] = x0 + order_idx.get(node["id"], 0) * x_step
@@ -1057,9 +1707,12 @@ class PlotNeuralNetRenderer:
         if side_caption:
             caption = ""
         elif len(lines) > 1:
-            caption = r"\shortstack[c]{" + r" \\ ".join(lines) + "}"
+            caption = r"\scriptsize\shortstack[c]{" + r" \\ ".join(lines) + "}"
         else:
-            caption = lines[0] if lines else ""
+            if lines and len(lines[0]) > 14:
+                caption = r"\scriptsize " + lines[0]
+            else:
+                caption = lines[0] if lines else ""
         macro = node.get("macro", "Box")
         params = node.get("params", {})
 
@@ -1080,8 +1733,8 @@ class PlotNeuralNetRenderer:
     }}}};"""
 
         if side_caption:
-            side_text = r"\shortstack[r]{" + r" \\ ".join(lines) + "}"
-            tex += f"\n\\node[anchor=east] at ($({name}-west)+(-0.20,-0.35)$) {{{side_text}}};"
+            side_text = r"\scriptsize\shortstack[r]{" + r" \\ ".join(lines) + "}"
+            tex += f"\n\\node[anchor=north, align=center] at ($({name}-south)+(0.00,-0.62)$) {{{side_text}}};"
 
         return tex
 
