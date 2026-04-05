@@ -1,0 +1,7 @@
+{
+  "id": "G-005",
+  "type": "general",
+  "prompt": "Построй общую архитектуру аналитической платформы. Акторы: Analyst, Data Engineer, Admin. Компоненты: Dashboard, API Gateway, Ingestion Service, Processing Service, Feature Store, Model Service, Monitoring, Metadata DB, Results DB. Нужна строгая научно-деловая подача, компактная композиция и минимальная перегрузка подписями.",
+  "expected": "Баланс между левыми и правыми частями схемы. Разные типы блоков визуально различимы. Подписи короткие и не раздувают узлы.",
+  "notes": "Тест на визуальную иерархию и различимость типов узлов."
+}

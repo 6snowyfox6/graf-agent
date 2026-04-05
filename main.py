@@ -31,8 +31,13 @@ MODEL_ENDPOINTS: dict[str, str] = {
 def _get_endpoint(model: str) -> str:
     return MODEL_ENDPOINTS.get(model, QWEN_URL)
 
-
-
+def load_user_prompt(default_prompt: str) -> str:
+    test_prompt_path = Path("_test_prompt.txt")
+    if test_prompt_path.exists():
+        text = test_prompt_path.read_text(encoding="utf-8").strip()
+        if text:
+            return text
+    return default_prompt
 
 FORBIDDEN_VISIBLE_TOKENS = {
     "input", "output", "block", "conv", "ui", "api", "db", "service"
@@ -319,6 +324,49 @@ def get_diagram_config(mode: str, configs: list[dict]) -> dict:
             return config
 
     raise ValueError(f"Не найден конфиг для режима: {mode}")
+
+
+def looks_like_general_request(user_task: str) -> bool:
+    text = (user_task or "").lower()
+
+    general_markers = [
+        "архитектур", "архитектура", "система", "платформа", "сервис", "сервисы",
+        "портал", "веб", "web", "ui", "api", "gateway", "дашборд", "dashboard",
+        "база", "database", "db", "клиент", "пользователь", "администратор",
+        "оператор", "менеджер", "analyst", "аналитик", "crm", "магазин",
+        "shop", "store", "portal", "service"
+    ]
+    model_markers = [
+        "unet", "u-net", "cnn", "resnet", "transformer", "encoder", "decoder",
+        "bottleneck", "skip", "attention", "feature map", "featuremap",
+        "нейросет", "сегментац", "слой", "embedding", "backbone", "neck",
+        "head", "conv2d", "maxpool", "upsample"
+    ]
+
+    general_score = sum(1 for marker in general_markers if marker in text)
+    model_score = sum(1 for marker in model_markers if marker in text)
+
+    return general_score >= 2 and model_score == 0
+
+
+def force_general_contract(diagram: dict, fallback: dict | None = None) -> dict:
+    fixed = normalize_general_diagram(diagram, fallback=fallback or {})
+
+    fixed["layout_hint"] = "general"
+    fixed["renderer"] = "general"
+
+    style = fixed.get("style")
+    if not isinstance(style, dict):
+        style = {}
+    style.setdefault("direction", "TB")
+    fixed["style"] = style
+
+    for edge in fixed.get("edges", []):
+        label = str(edge.get("label", "")).strip()
+        if len(label) > 24:
+            edge["label"] = ""
+
+    return fixed
 
 
 def get_node_level(node_id: str, label: str, kind: str | None = None) -> int:
@@ -1026,6 +1074,9 @@ def render_diagram(diagram: dict, output_name: str = "diagram"):
     renderer = diagram.get("renderer", "")
     layout_hint = diagram.get("layout_hint", "")
 
+    if renderer == "general" or layout_hint == "general":
+        return render_general_diagram(diagram, output_name)
+
     if renderer == "plotneuralnet" or layout_hint == "model_architecture":
         plot_renderer = build_model_renderer(diagram, project_root=".")
         return plot_renderer.render(diagram, output_name=output_name)
@@ -1192,7 +1243,18 @@ def improve_diagram(
         improved = extract_json(raw_answer)
         improved = clean_diagram_labels(improved)
         improved = restore_node_kinds(draft_json, improved)
-        improved = normalize_general_diagram(improved, fallback=draft_json)
+
+        should_force_general = (
+            draft_json.get("renderer") == "general"
+            or draft_json.get("layout_hint") == "general"
+            or looks_like_general_request(user_task)
+        )
+
+        if should_force_general:
+            improved = force_general_contract(improved, fallback=draft_json)
+        else:
+            improved = normalize_general_diagram(improved, fallback=draft_json)
+
         return improved
     except Exception:
         print("Ошибка парсинга improve-ответа. Возвращаю draft_json.")
@@ -1348,6 +1410,10 @@ def analyze_reference_image(image_path: str) -> dict:
 def generate_diagram(user_task: str, reference_description: dict | str | None = None) -> dict:
     configs = DIAGRAM_CONFIGS or load_diagram_types()
     mode = detect_diagram_mode(user_task, configs)
+
+    if looks_like_general_request(user_task):
+        mode = "general"
+
     config = get_diagram_config(mode, configs)
 
     system_prompt = config["system_prompt"]
@@ -1423,8 +1489,11 @@ def generate_diagram(user_task: str, reference_description: dict | str | None = 
         try:
             candidate = extract_json(raw_answer)
 
-            if layout_hint == "general":
-                candidate = normalize_general_diagram(candidate)
+            if layout_hint == "general" or looks_like_general_request(user_task):
+                candidate = force_general_contract(candidate)
+                layout_hint = "general"
+            else:
+                candidate = clean_diagram_labels(candidate)
 
             candidate = clean_diagram_labels(candidate)
 
@@ -1442,20 +1511,26 @@ def generate_diagram(user_task: str, reference_description: dict | str | None = 
     if best_candidate is not None:
         return best_candidate
 
-    return {
+    fallback_result = {
         "type": "flowchart",
         "title": "Ошибка генерации",
         "layout_hint": layout_hint,
+        "renderer": "general" if layout_hint == "general" else config.get("renderer", "general"),
         "style": {"direction": "TB", "theme": "clean"},
         "lanes": [],
         "nodes": [{"id": "error", "label": "Ошибка генерации JSON", "kind": "block"}],
         "edges": [],
     }
 
+    if layout_hint == "general" or looks_like_general_request(user_task):
+        fallback_result = force_general_contract(fallback_result)
+
+    return fallback_result
+
 
 def main():
-
-    user_task = """2д схема автосервиса"""
+    default_prompt = """2д схема автосервиса"""
+    user_task = load_user_prompt(default_prompt)
 
     # Референсы теперь пустые по умолчанию. Скрипт будет подтягивать 
     # только те файлы, что лежат в папке references/ (если они там есть).
@@ -1485,3 +1560,4 @@ if __name__ == "__main__":
     with ServerManager() as manager:
         manager.start_default_servers()
         main()
+        manager.stop_all()

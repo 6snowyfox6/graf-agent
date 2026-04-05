@@ -40,4 +40,5 @@ llm/
 Thumbs.db
 
 models/
+tests/runs/
 

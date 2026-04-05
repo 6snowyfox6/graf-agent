@@ -1,0 +1,1 @@
+Построй общую архитектуру аналитической платформы. Акторы: Analyst, Data Engineer, Admin. Компоненты: Dashboard, API Gateway, Ingestion Service, Processing Service, Feature Store, Model Service, Monitoring, Metadata DB, Results DB. Нужна строгая научно-деловая подача, компактная композиция и минимальная перегрузка подписями.
