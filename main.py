@@ -11,6 +11,7 @@ from typing import Any
 from plotneuralnet_renderer import PlotNeuralNetRenderer, build_model_renderer
 from infographic_renderer import InfographicRenderer
 from graphviz import Digraph
+from server_manager import ServerManager
 
 # Локальные endpoints llama-cpp-python
 # Qwen (генератор) на порту 8000, Gemma (критик/vision) на порту 8001
@@ -1454,24 +1455,7 @@ def generate_diagram(user_task: str, reference_description: dict | str | None = 
 
 def main():
 
-    user_task = """Сгенерируй детальную архитектуру Vision Transformer (ViT-B/16) для классификации изображений в стиле model_architecture.
-
-Требования:
-- renderer: plotneuralnet
-- layout: linear
-- python_backend: on
-- Покажи полный поток:
-  1) Input Image 224x224x3
-  2) Patch Embedding (patch size 16, projection to 768)
-  3) Positional Encoding + [CLS] token
-  4) Encoder stack: 12 Transformer blocks (каждый: MSA -> Add&Norm -> MLP -> Add&Norm)
-  5) Final LayerNorm
-  6) MLP Head
-  7) Output Classes (1000)
-- Отдельно визуально выдели повторяющийся Transformer block и подпиши “x12”.
-- Сделай читаемые короткие подписи без наложений.
-- Сохрани 3D-стиль PlotNeuralNet, аккуратные стрелки слева направо.
-- Верни только валидный JSON без markdown."""
+    user_task = """2д схема автосервиса"""
 
     # Референсы теперь пустые по умолчанию. Скрипт будет подтягивать 
     # только те файлы, что лежат в папке references/ (если они там есть).
@@ -1494,6 +1478,10 @@ def main():
     output_filename = f"diagram_{int(time.time())}"
     render_diagram(final_clean, output_filename)
 
+    pass
+
 
 if __name__ == "__main__":
-    main()
+    with ServerManager() as manager:
+        manager.start_default_servers()
+        main()

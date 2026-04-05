@@ -1,29 +1,44 @@
-#!/bin/bash
+#!/usr/bin/env bash
+set -euo pipefail
 
-# Сервер Gemma 3 4B — критик и vision
-# Запускается на порту 8001
+PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$PROJECT_ROOT"
 
-DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
-MODEL_PATH="$DIR/../models/google_gemma-3-4b-it-Q4_K_M.gguf"
-CUDA_DIR="/usr/local/cuda-12.8"
+CUDA_HOME="${CUDA_HOME:-/usr/local/cuda-13.2}"
+export CUDA_HOME
+export PATH="$CUDA_HOME/bin:$PATH"
+export LD_LIBRARY_PATH="$CUDA_HOME/targets/x86_64-linux/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 
-if [ -d "$CUDA_DIR" ]; then
-    export CUDA_HOME="$CUDA_DIR"
-    export PATH="$CUDA_DIR/bin:$PATH"
-    export LD_LIBRARY_PATH="$CUDA_DIR/lib64:${LD_LIBRARY_PATH:-}"
-fi
+PYTHON_BIN="${PYTHON_BIN:-$PROJECT_ROOT/.venv/bin/python3}"
+MODEL_PATH="$PROJECT_ROOT/models/google_gemma-3-4b-it-Q4_K_M.gguf"
 
-if [ ! -f "$MODEL_PATH" ]; then
-    echo "Модель Gemma не найдена: $MODEL_PATH"
-    echo "Сначала запустите: python3 scripts/download_models.py"
+echo "=== start_server_gemma.sh ==="
+echo "PROJECT_ROOT=$PROJECT_ROOT"
+echo "CUDA_HOME=$CUDA_HOME"
+echo "PYTHON_BIN=$PYTHON_BIN"
+echo "MODEL_PATH=$MODEL_PATH"
+echo "LD_LIBRARY_PATH=$LD_LIBRARY_PATH"
+
+if [ ! -x "$PYTHON_BIN" ]; then
+    echo "Python не найден: $PYTHON_BIN"
     exit 1
 fi
 
-echo "Запускаем Gemma 3 4B на порту 8001..."
-python3 -m llama_cpp.server \
+if [ ! -f "$MODEL_PATH" ]; then
+    echo "Модель Gemma не найдена по пути: $MODEL_PATH"
+    echo "Сначала скачай модель."
+    exit 1
+fi
+
+"$PYTHON_BIN" -c "import sys; print('python =', sys.executable)"
+"$PYTHON_BIN" -c "import llama_cpp; print('llama_cpp =', llama_cpp.__file__)"
+
+exec "$PYTHON_BIN" -m llama_cpp.server \
     --model "$MODEL_PATH" \
-    --host 0.0.0.0 \
+    --host 127.0.0.1 \
     --port 8001 \
-    --n_gpu_layers -1 \
-    --n_ctx 8192 \
+    --n_gpu_layers 10 \
+    --n_ctx 2048 \
+    --n_batch 64 \
+    --n_ubatch 64 \
     --chat_format chatml
