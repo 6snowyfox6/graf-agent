@@ -47,10 +47,7 @@ IMAGE_PATTERNS = [
     "final_diagram*.pdf",
 ]
 
-SEARCH_DIRS = [
-    ROOT,
-    ROOT / "outputs",
-]
+SEARCH_DIRS = [ROOT]
 
 
 def load_case(path: Path) -> dict:
