@@ -50,18 +50,18 @@ def clean_visible_label(label: str) -> str:
     if not s:
         return "Компонент"
 
-    # убрать служебные хвосты и мусор
+    s = s.replace("_", " ").replace("-", " ")
+    s = re.sub(r"\s+", " ", s).strip()
+
+    # убрать служебные хвосты
     s = re.sub(
         r"\s*\((input|output|block|conv|pool|service|db|ui|api|database)\)\s*",
         "",
         s,
         flags=re.IGNORECASE,
     )
-    s = s.replace("_", " ")
-    s = s.replace("-", " ")
-    s = re.sub(r"\s+", " ", s).strip()
 
-    # сначала многословные и самые важные шаблоны
+    # сначала самые специфичные многословные шаблоны
     replacements = [
         # роли
         (r"\bsales\s+manager\b", "Менеджер продаж"),
@@ -69,6 +69,69 @@ def clean_visible_label(label: str) -> str:
         (r"\bdata\s+engineer\b", "Инженер данных"),
         (r"\bsupport\s+agent\b", "Оператор поддержки"),
 
+        # интерфейсы
+        (r"\bweb\s+portal\b", "Веб-портал"),
+        (r"\bmobile\s+app\b", "Мобильное приложение"),
+        (r"\bweb\s+app\b", "Веб-приложение"),
+        (r"\bweb\s+ui\b", "Веб-интерфейс"),
+        (r"\bapi\s+gateway\b", "API-шлюз"),
+
+        # сервисы
+        (r"\bauth\s+service\b", "Сервис аутентификации"),
+        (r"\bcourse\s+service\b", "Сервис курсов"),
+        (r"\bnotification\s+service\b", "Сервис уведомлений"),
+        (r"\border\s+service\b", "Сервис заказов"),
+        (r"\bpayment\s+service\b", "Сервис платежей"),
+        (r"\binventory\s+service\b", "Сервис склада"),
+        (r"\bdelivery\s+service\b", "Сервис доставки"),
+        (r"\bleads\s+service\b", "Сервис лидов"),
+        (r"\bdeals\s+service\b", "Сервис сделок"),
+        (r"\breports?\s+service\b", "Сервис отчётов"),
+        (r"\bticket\s+service\b", "Сервис заявок"),
+        (r"\bassignment\s+service\b", "Сервис распределения"),
+        (r"\bsla\s+monitor\b", "Контроль SLA"),
+        (r"\banalytics\s+service\b", "Сервис аналитики"),
+        (r"\bingestion\s+service\b", "Сервис загрузки"),
+        (r"\bprocessing\s+service\b", "Сервис обработки"),
+        (r"\bmodel\s+service\b", "Сервис моделей"),
+
+        # базы и хранилища
+        (r"\buser\s+db\b", "База пользователей"),
+        (r"\busers\s+db\b", "База пользователей"),
+        (r"\buser\s+database\b", "База пользователей"),
+        (r"\busers\s+database\b", "База пользователей"),
+
+        (r"\bcourse\s+db\b", "База курсов"),
+        (r"\bcourses\s+db\b", "База курсов"),
+        (r"\bcourse\s+database\b", "База курсов"),
+        (r"\bcourses\s+database\b", "База курсов"),
+
+        (r"\border\s+db\b", "База заказов"),
+        (r"\borders\s+db\b", "База заказов"),
+        (r"\border\s+database\b", "База заказов"),
+        (r"\borders\s+database\b", "База заказов"),
+
+        (r"\bproduct\s+db\b", "База товаров"),
+        (r"\bproducts\s+db\b", "База товаров"),
+        (r"\bproduct\s+database\b", "База товаров"),
+        (r"\bproducts\s+database\b", "База товаров"),
+
+        (r"\bticket\s+db\b", "База заявок"),
+        (r"\btickets\s+db\b", "База заявок"),
+        (r"\bticket\s+database\b", "База заявок"),
+        (r"\btickets\s+database\b", "База заявок"),
+
+        (r"\bmetadata\s+db\b", "База метаданных"),
+        (r"\bresults?\s+db\b", "База результатов"),
+        (r"\bcrm\s+database\b", "База CRM"),
+        (r"\bfeature\s+store\b", "Хранилище признаков"),
+    ]
+
+    for pattern, repl in replacements:
+        s = re.sub(pattern, repl, s, flags=re.IGNORECASE)
+
+    # потом одиночные роли
+    single_replacements = [
         (r"\bstudent\b", "Студент"),
         (r"\bteacher\b", "Преподаватель"),
         (r"\badministrator\b", "Администратор"),
@@ -81,72 +144,27 @@ def clean_visible_label(label: str) -> str:
         (r"\bengineer\b", "Инженер"),
         (r"\blead\b", "Руководитель"),
 
-        # интерфейсы
-        (r"\bweb\s+portal\b", "Веб-портал"),
-        (r"\bmobile\s+app\b", "Мобильное приложение"),
-        (r"\bweb\s+app\b", "Веб-приложение"),
-        (r"\bweb\s+ui\b", "Веб-интерфейс"),
         (r"\bdashboard\b", "Панель"),
         (r"\bportal\b", "Портал"),
         (r"\bweb\b", "Веб-интерфейс"),
-        (r"\bapi\s+gateway\b", "API-шлюз"),
         (r"\bgateway\b", "Шлюз"),
-        (r"\bapi\s*v?\.?\s*(\d+)\b", r"API \1"),
         (r"\bapi\b", "API"),
         (r"\bui\b", "Интерфейс"),
 
-        # сервисы
-        (r"\bauth\s+service\b", "Сервис аутентификации"),
-        (r"\bcourse\s+service\b", "Сервис курсов"),
-        (r"\bnotification\s+service\b", "Сервис уведомлений"),
-        (r"\border\s+service\b", "Сервис заказов"),
-        (r"\bpayment\s+service\b", "Сервис платежей"),
-        (r"\binventory\s+service\b", "Сервис склада"),
-        (r"\bdelivery\s+service\b", "Сервис доставки"),
-        (r"\bleads\s+service\b", "Сервис лидов"),
-        (r"\bdeals\s+service\b", "Сервис сделок"),
-        (r"\breports\s+service\b", "Сервис отчётов"),
-        (r"\bticket\s+service\b", "Сервис заявок"),
-        (r"\bassignment\s+service\b", "Сервис распределения"),
-        (r"\bsla\s+monitor\b", "Контроль SLA"),
-        (r"\banalytics\s+service\b", "Сервис аналитики"),
-        (r"\bingestion\s+service\b", "Сервис загрузки"),
-        (r"\bprocessing\s+service\b", "Сервис обработки"),
-        (r"\bmodel\s+service\b", "Сервис моделей"),
-
-        # данные и хранилища
-        (r"\buser\s+db\b", "База пользователей"),
-        (r"\busers\s+db\b", "База пользователей"),
-        (r"\bcourse\s+db\b", "База курсов"),
-        (r"\bcourses\s+db\b", "База курсов"),
-        (r"\border[s]?\s+db\b", "База заказов"),
-        (r"\bproduct[s]?\s+db\b", "База товаров"),
-        (r"\bticket[s]?\s+db\b", "База заявок"),
-        (r"\busers?\s+database\b", "База пользователей"),
-        (r"\bcourses?\s+database\b", "База курсов"),
-        (r"\border[s]?\s+database\b", "База заказов"),
-        (r"\bproduct[s]?\s+database\b", "База товаров"),
-        (r"\bticket[s]?\s+database\b", "База заявок"),
-        (r"\bcrm\s+database\b", "База CRM"),
-        (r"\bmetadata\s+db\b", "База метаданных"),
-        (r"\bresults?\s+db\b", "База результатов"),
-        (r"\bfeature\s+store\b", "Хранилище признаков"),
-        (r"\bmetadata\b", "Метаданные"),
-        (r"\bresults?\b", "Результаты"),
-        (r"\bdatabase\b", "База данных"),
-        (r"\bdb\b", "База данных"),
-
-        # отдельные слова
         (r"\bnotifications?\b", "Уведомления"),
         (r"\banalytics?\b", "Аналитика"),
         (r"\bauth\b", "Аутентификация"),
         (r"\bpayment\b", "Платежи"),
         (r"\binventory\b", "Склад"),
         (r"\bdelivery\b", "Доставка"),
-        (r"\border[s]?\b", "Заказы"),
-        (r"\bproduct[s]?\b", "Товары"),
-        (r"\bcourse[s]?\b", "Курсы"),
-        (r"\bticket[s]?\b", "Заявки"),
+        (r"\border\b", "Заказ"),
+        (r"\borders\b", "Заказы"),
+        (r"\bproduct\b", "Товар"),
+        (r"\bproducts\b", "Товары"),
+        (r"\bcourse\b", "Курс"),
+        (r"\bcourses\b", "Курсы"),
+        (r"\bticket\b", "Заявка"),
+        (r"\btickets\b", "Заявки"),
         (r"\bleads\b", "Лиды"),
         (r"\bdeals\b", "Сделки"),
         (r"\breports?\b", "Отчёты"),
@@ -154,9 +172,12 @@ def clean_visible_label(label: str) -> str:
         (r"\bingestion\b", "Загрузка"),
         (r"\bmonitoring\b", "Мониторинг"),
         (r"\bmodel\b", "Модель"),
+        (r"\bmetadata\b", "Метаданные"),
+        (r"\bresults?\b", "Результаты"),
+        (r"\bdatabase\b", "База данных"),
+        (r"\bdb\b", "База данных"),
         (r"\bservice\b", "Сервис"),
 
-        # удалить служебные слова
         (r"\bblock\b", ""),
         (r"\bconv\b", ""),
         (r"\binput\b", ""),
@@ -164,41 +185,44 @@ def clean_visible_label(label: str) -> str:
         (r"\bpool\b", ""),
     ]
 
-    for pattern, repl in replacements:
+    for pattern, repl in single_replacements:
         s = re.sub(pattern, repl, s, flags=re.IGNORECASE)
 
-    # чинить гибриды вида "Course База данных"
-    hybrid_db_patterns = [
-        (r"(?i)\bкурсы?\s+база данных\b", "База курсов"),
-        (r"(?i)\bзаказы?\s+база данных\b", "База заказов"),
-        (r"(?i)\bтовары?\s+база данных\b", "База товаров"),
-        (r"(?i)\bзаявки?\s+база данных\b", "База заявок"),
-        (r"(?i)\bпользователи?\s+база данных\b", "База пользователей"),
+    # пост-очистка плохих склеек
+    post_fixes = [
+        (r"(?i)\bпользователь\s+база данных\b", "База пользователей"),
+        (r"(?i)\bпользователи\s+база данных\b", "База пользователей"),
+        (r"(?i)\bкурс(?:ы)?\s+база данных\b", "База курсов"),
+        (r"(?i)\bзаказ(?:ы)?\s+база данных\b", "База заказов"),
+        (r"(?i)\bтовар(?:ы)?\s+база данных\b", "База товаров"),
+        (r"(?i)\bзаявк(?:а|и)\s+база данных\b", "База заявок"),
+        (r"(?i)\bрезультат(?:ы)?\s+база данных\b", "База результатов"),
         (r"(?i)\bметаданные\s+база данных\b", "База метаданных"),
-        (r"(?i)\bрезультаты?\s+база данных\b", "База результатов"),
+
+        (r"(?i)\bsales\s+менеджер\b", "Менеджер продаж"),
+        (r"(?i)\binterface\s+веб приложение\b", "Веб-приложение"),
+        (r"(?i)\bинтерфейс\s+веб приложение\b", "Веб-приложение"),
+        (r"(?i)\bинтерфейс\s+веб интерфейс\b", "Веб-интерфейс"),
+        (r"(?i)\bapi\s+шлюз\b", "API-шлюз"),
+        (r"(?i)\bшлюз\s+api\b", "API-шлюз"),
+        (r"(?i)\bинтерфейс\s+api\b", "API"),
+        (r"(?i)\bapi\s+сервис\b", "API"),
+        (r"(?i)\bинтерфейс\s+сервис\b", "Интерфейс"),
     ]
-    for pattern, repl in hybrid_db_patterns:
+
+    for pattern, repl in post_fixes:
         s = re.sub(pattern, repl, s)
 
-    # чинить гибриды вида "API сервис", "Программный интерфейс сервис"
-    s = re.sub(r"(?i)\bapi\s+сервис\b", "API", s)
-    s = re.sub(r"(?i)\bинтерфейс\s+сервис\b", "Интерфейс", s)
-    s = re.sub(r"(?i)\bшлюз\s+api\b", "API-шлюз", s)
-
-    # убрать повтор слов
+    # убрать повторы
     s = re.sub(r"(?i)\b(сервис)\s+\1\b", r"\1", s)
-    s = re.sub(r"(?i)\b(база данных)\s+\1\b", r"\1", s)
     s = re.sub(r"(?i)\b(интерфейс)\s+\1\b", r"\1", s)
+    s = re.sub(r"(?i)\b(база данных)\s+\1\b", r"\1", s)
 
-    # косметика
     s = re.sub(r"\s+", " ", s).strip(" ,;:()[]-")
-    s = s.replace("  ", " ")
 
-    # если остался короткий английский хвост — не уродовать транслитом, а аккуратно оформить
     if re.fullmatch(r"[A-Za-z0-9 ]+", s):
         s = s.title()
 
-    # слишком общие названия считаем плохими
     bad_generic = {
         "", "Component", "Компонент", "Service", "Сервис", "Database",
         "База Данных", "Data", "Данные", "Module", "Модуль", "Block"
@@ -211,23 +235,49 @@ def clean_visible_label(label: str) -> str:
 
 def infer_general_kind_from_label(label: str, node_id: str = "") -> str:
     t = f"{node_id} {label}".lower()
+    t = t.replace("_", " ").replace("-", " ")
+    t = re.sub(r"\s+", " ", t).strip()
 
-    if any(x in t for x in [
-        "пользователь", "админ", "администратор", "модератор",
-        "клиент", "оператор", "внешние системы", "внешние сервисы",
-        "интеграции","student", "teacher", "analyst", "manager", "engineer", "lead"
-    ]):
+    actor_markers = [
+        "студент", "преподаватель", "администратор", "клиент", "оператор",
+        "аналитик", "менеджер", "инженер", "руководитель",
+        "student", "teacher", "administrator", "admin", "client",
+        "operator", "analyst", "manager", "engineer", "lead",
+    ]
+
+    interface_markers = [
+        "веб", "портал", "интерфейс", "api", "шлюз", "панель",
+        "web", "gateway", "dashboard", "ui", "frontend",
+        "mobile app", "web app", "web ui", "web portal",
+    ]
+
+    storage_markers = [
+        "база", "хранилище", "архив", "репозиторий",
+        "database", "db", "store", "repository", "warehouse",
+    ]
+
+    service_markers = [
+        "сервис", "модуль", "обработка", "загрузка", "мониторинг",
+        "уведомления", "аналитика", "аутентификация", "платежи",
+        "доставка", "заказы", "сделки", "лиды", "отчеты", "отчёты",
+        "ticket", "order", "payment", "inventory", "delivery",
+        "processing", "ingestion", "monitoring", "auth", "analytics",
+        "service", "module", "processor",
+    ]
+
+    if any(x in t for x in storage_markers):
+        return "output"
+    if any(x in t for x in interface_markers):
+        return "conv"
+    if any(x in t for x in service_markers):
+        return "block"
+    if any(x in t for x in actor_markers):
         return "input"
 
-    if any(x in t for x in [
-        "интерфейс", "веб", "api", "ui", "портал", "панель"
-    ]):
-        return "conv"
-
-    if any(x in t for x in [
-        "база", "хранилище", "лог", "телеметр", "архив"
-    ]):
+    if re.search(r"(^| )db($| )|(^| )database($| )", t):
         return "output"
+    if re.search(r"(^| )api($| )|(^| )ui($| )|(^| )web($| )", t):
+        return "conv"
 
     return "block"
 
@@ -412,73 +462,74 @@ def get_diagram_config(mode: str, configs: list[dict]) -> dict:
     raise ValueError(f"Не найден конфиг для режима: {mode}")
 
 
-def looks_like_general_request(user_task: str) -> bool:
-    text = (user_task or "").lower()
-
-    general_markers = [
-        "архитектур", "архитектура", "система", "платформа", "сервис", "сервисы",
-        "портал", "веб", "web", "ui", "api", "gateway", "дашборд", "dashboard",
-        "база", "database", "db", "клиент", "пользователь", "администратор",
-        "оператор", "менеджер", "analyst", "аналитик", "crm", "магазин",
-        "shop", "store", "portal", "service"
-    ]
-    model_markers = [
-        "unet", "u-net", "cnn", "resnet", "transformer", "encoder", "decoder",
-        "bottleneck", "skip", "attention", "feature map", "featuremap",
-        "нейросет", "сегментац", "слой", "embedding", "backbone", "neck",
-        "head", "conv2d", "maxpool", "upsample"
-    ]
-
-    general_score = sum(1 for marker in general_markers if marker in text)
-    model_score = sum(1 for marker in model_markers if marker in text)
-
-    return general_score >= 2 and model_score == 0
-
-
-def force_general_contract(diagram: dict, fallback: dict | None = None) -> dict:
-    fixed = normalize_general_diagram(diagram, fallback=fallback or {})
-
-    fixed["layout_hint"] = "general"
-    fixed["renderer"] = "general"
-
-    style = fixed.get("style")
-    if not isinstance(style, dict):
-        style = {}
-    style.setdefault("direction", "TB")
-    fixed["style"] = style
-
-    for edge in fixed.get("edges", []):
-        label = str(edge.get("label", "")).strip()
-        if len(label) > 24:
-            edge["label"] = ""
-
-    return fixed
-
-
 def get_node_level(node_id: str, label: str, kind: str | None = None) -> int:
     kind = str(kind or "").lower().strip()
     text = f"{node_id} {label}".lower()
+    text = text.replace("_", " ").replace("-", " ")
+    text = re.sub(r"\s+", " ", text).strip()
+
+    actor_markers = [
+        "пользователь", "клиент", "студент", "преподаватель",
+        "администратор", "оператор", "аналитик", "менеджер",
+        "инженер", "руководитель",
+        "student", "teacher", "administrator", "admin",
+        "client", "operator", "analyst", "manager", "engineer", "lead",
+    ]
+
+    interface_markers = [
+        "веб", "портал", "интерфейс", "api", "шлюз", "панель",
+        "приложение", "веб-портал", "веб-интерфейс", "веб-приложение",
+        "web", "gateway", "dashboard", "ui", "frontend",
+    ]
+
+    storage_markers = [
+        "база", "хранилище", "архив", "репозиторий",
+        "database", "db", "store", "repository", "warehouse",
+    ]
+
+    service_markers = [
+        "сервис", "модуль", "обработка", "загрузка", "мониторинг",
+        "уведомления", "аналитика", "аутентификация", "платежи",
+        "доставка", "заказы", "сделки", "лиды", "отчеты", "отчёты",
+        "контроль sla", "service", "module", "processor",
+        "processing", "ingestion", "monitoring", "auth", "analytics",
+        "payment", "delivery", "inventory", "order", "ticket",
+    ]
 
     if kind == "input":
-        if any(x in text for x in ["интерфейс", "веб", "панель", "портал", "api", "ui"]):
+        if any(x in text for x in storage_markers):
+            return 3
+        if any(x in text for x in service_markers):
+            return 2
+        if any(x in text for x in interface_markers) and not any(x in text for x in actor_markers):
             return 1
         return 0
 
     if kind == "conv":
+        if any(x in text for x in storage_markers):
+            return 3
         return 1
 
     if kind == "block":
+        if any(x in text for x in storage_markers):
+            return 3
+        if any(x in text for x in actor_markers) and not any(x in text for x in service_markers):
+            return 0
         return 2
 
     if kind == "output":
+        if any(x in text for x in actor_markers):
+            return 0
         return 3
 
-    if any(x in text for x in ["пользователь", "модератор", "администратор", "оператор"]):
-        return 0
-    if any(x in text for x in ["интерфейс", "веб", "панель", "портал", "api", "ui"]):
-        return 1
-    if any(x in text for x in ["база", "хранилище", "телеметр", "лог", "данн"]):
+    if any(x in text for x in storage_markers):
         return 3
+    if any(x in text for x in interface_markers):
+        return 1
+    if any(x in text for x in service_markers):
+        return 2
+    if any(x in text for x in actor_markers):
+        return 0
 
     return 2
 
@@ -624,10 +675,10 @@ def score_general_candidate(diagram: dict) -> int:
     if not isinstance(nodes, list) or not isinstance(edges, list):
         return -1000
 
-    node_ids = set()
-    labels = []
-    levels = []
     kinds_count = {"input": 0, "conv": 0, "block": 0, "output": 0}
+    node_by_id: dict[str, dict] = {}
+    indeg: dict[str, int] = {}
+    outdeg: dict[str, int] = {}
 
     generic_bad = {
         "компонент", "узел", "сервис", "модуль", "данные",
@@ -637,17 +688,27 @@ def score_general_candidate(diagram: dict) -> int:
     actor_markers = [
         "студент", "преподаватель", "администратор", "клиент", "оператор",
         "аналитик", "менеджер", "инженер", "руководитель",
-        "student", "teacher", "admin", "administrator", "client",
-        "operator", "analyst", "manager", "engineer", "lead"
+        "student", "teacher", "administrator", "admin", "client",
+        "operator", "analyst", "manager", "engineer", "lead",
     ]
 
-    db_markers = [
-        "база", "хранилище", "database", "db", "store", "repository"
-    ]
-
-    ui_markers = [
+    interface_markers = [
         "веб", "портал", "интерфейс", "api", "шлюз", "панель",
-        "web", "gateway", "dashboard", "ui"
+        "web", "gateway", "dashboard", "ui", "frontend",
+    ]
+
+    storage_markers = [
+        "база", "хранилище", "архив", "репозиторий",
+        "database", "db", "store", "repository", "warehouse",
+    ]
+
+    service_markers = [
+        "сервис", "модуль", "обработка", "загрузка", "мониторинг",
+        "уведомления", "аналитика", "аутентификация", "платежи",
+        "доставка", "заказы", "сделки", "лиды", "отчеты", "отчёты",
+        "ticket", "order", "payment", "inventory", "delivery",
+        "processing", "ingestion", "monitoring", "auth", "analytics",
+        "service", "module", "processor",
     ]
 
     english_leftovers = [
@@ -662,7 +723,7 @@ def score_general_candidate(diagram: dict) -> int:
         score -= (len(nodes) - 14) * 5
 
     if len(edges) < 3:
-        score -= 20
+        score -= 18
     elif len(edges) > 20:
         score -= (len(edges) - 20) * 3
 
@@ -679,28 +740,30 @@ def score_general_candidate(diagram: dict) -> int:
             score -= 20
             continue
 
-        if node_id in node_ids:
+        if node_id in node_by_id:
             score -= 20
             continue
-        node_ids.add(node_id)
+
+        node_by_id[node_id] = node
+        indeg[node_id] = 0
+        outdeg[node_id] = 0
+
+        lower = label.lower()
+
+        if kind in kinds_count:
+            kinds_count[kind] += 1
+        else:
+            score -= 12
 
         if not label:
             score -= 15
             continue
 
-        lower = label.lower()
-        labels.append(lower)
-
-        if kind in kinds_count:
-            kinds_count[kind] += 1
-        else:
-            score -= 10
+        if lower in generic_bad:
+            score -= 35
 
         if any(tok in lower for tok in FORBIDDEN_VISIBLE_TOKENS):
             score -= 25
-
-        if lower in generic_bad:
-            score -= 30
 
         if len(label) > 30:
             score -= 8
@@ -710,24 +773,53 @@ def score_general_candidate(diagram: dict) -> int:
         if any(x in lower for x in english_leftovers):
             score -= 10
 
-        if any(ch.isascii() and ch.isalpha() for ch in label) and any("а" <= ch.lower() <= "я" for ch in label):
+        mixed_lang = (
+            any(("а" <= ch.lower() <= "я") for ch in label)
+            and any((ch.isascii() and ch.isalpha()) for ch in label)
+        )
+        if mixed_lang:
             score -= 8
 
-        level = get_node_level(node_id, label, kind)
-        levels.append(level)
+        has_actor = any(x in lower for x in actor_markers)
+        has_interface = any(x in lower for x in interface_markers)
+        has_storage = any(x in lower for x in storage_markers)
+        has_service = any(x in lower for x in service_markers)
 
-        if kind == "input" and any(x in lower for x in db_markers):
-            score -= 18
-        if kind == "output" and any(x in lower for x in actor_markers):
-            score -= 18
-        if kind == "conv" and any(x in lower for x in db_markers):
-            score -= 14
-        if kind == "block" and any(x in lower for x in actor_markers):
-            score -= 14
-        if kind == "output" and any(x in lower for x in ui_markers):
-            score -= 12
+        if kind == "input":
+            if has_service:
+                score -= 28
+            if has_storage:
+                score -= 25
+            if has_interface and not has_actor:
+                score -= 12
 
-    # хотим видеть все 4 слоя хотя бы в базовом виде
+        if kind == "conv":
+            if has_storage:
+                score -= 16
+            if has_actor and not has_interface:
+                score -= 12
+
+        if kind == "block":
+            if has_actor and not has_service:
+                score -= 16
+            if has_storage:
+                score -= 18
+
+        if kind == "output":
+            if has_actor:
+                score -= 22
+            if has_interface:
+                score -= 16
+
+        if kind == "input" and has_actor and not has_service and not has_storage:
+            score += 4
+        if kind == "conv" and has_interface and not has_storage:
+            score += 3
+        if kind == "block" and has_service and not has_actor:
+            score += 4
+        if kind == "output" and has_storage:
+            score += 4
+
     if kinds_count["input"] == 0:
         score -= 25
     if kinds_count["conv"] == 0:
@@ -741,9 +833,6 @@ def score_general_candidate(diagram: dict) -> int:
         score += 6
     if kinds_count["output"] >= 2:
         score += 4
-
-    in_deg = {nid: 0 for nid in node_ids}
-    out_deg = {nid: 0 for nid in node_ids}
 
     seen_edges = set()
 
@@ -764,7 +853,7 @@ def score_general_candidate(diagram: dict) -> int:
             score -= 18
             continue
 
-        if source not in node_ids or target not in node_ids:
+        if source not in node_by_id or target not in node_by_id:
             score -= 18
             continue
 
@@ -774,37 +863,48 @@ def score_general_candidate(diagram: dict) -> int:
             continue
         seen_edges.add(key)
 
-        in_deg[target] += 1
-        out_deg[source] += 1
+        indeg[target] += 1
+        outdeg[source] += 1
 
-        src_node = next((n for n in nodes if n.get("id") == source), None)
-        dst_node = next((n for n in nodes if n.get("id") == target), None)
-        if src_node and dst_node:
-            src_level = get_node_level(source, src_node.get("label", ""), src_node.get("kind"))
-            dst_level = get_node_level(target, dst_node.get("label", ""), dst_node.get("kind"))
+        src_node = node_by_id[source]
+        dst_node = node_by_id[target]
 
-            if dst_level < src_level:
-                score -= 6
-            if abs(dst_level - src_level) > 2:
-                score -= 6
+        src_level = get_node_level(source, src_node.get("label", ""), src_node.get("kind"))
+        dst_level = get_node_level(target, dst_node.get("label", ""), dst_node.get("kind"))
+
+        if dst_level < src_level:
+            score -= 6
+        if abs(dst_level - src_level) > 2:
+            score -= 6
 
         if label and len(label) > 18:
             score -= 5
 
-    # штраф за изолированные и "центральные хабы"
     isolated = 0
     heavy_hubs = 0
-    for nid in node_ids:
-        deg = in_deg[nid] + out_deg[nid]
+    wrong_top_nodes = 0
+
+    for node_id, node in node_by_id.items():
+        deg = indeg[node_id] + outdeg[node_id]
         if deg == 0:
             isolated += 1
         if deg >= 5:
             heavy_hubs += 1
 
+        label = str(node.get("label", "")).lower()
+        kind = str(node.get("kind", "")).lower()
+
+        if kind == "input" and any(x in label for x in service_markers):
+            wrong_top_nodes += 1
+
     score -= isolated * 12
     score -= heavy_hubs * 8
+    score -= wrong_top_nodes * 18
 
-    # бонус за более ровную уровневую структуру
+    levels = [
+        get_node_level(nid, node.get("label", ""), node.get("kind"))
+        for nid, node in node_by_id.items()
+    ]
     if levels:
         unique_levels = len(set(levels))
         if unique_levels >= 3:
@@ -828,7 +928,7 @@ def render_general_diagram(diagram: dict, output_name: str = "final_diagram") ->
         style_map = {
             "input": {
                 "shape": "ellipse",
-                "style": "filled",
+                "style": "filled,bold",
                 "fillcolor": "#d9ead3",
                 "color": "#4f7f4f",
             },
@@ -841,14 +941,14 @@ def render_general_diagram(diagram: dict, output_name: str = "final_diagram") ->
             "block": {
                 "shape": "box",
                 "style": "rounded,filled",
-                "fillcolor": "#d9e7f7",
-                "color": "#5a84c9",
+                "fillcolor": "#ddebf7",
+                "color": "#4a6fa5",
             },
             "output": {
-                "shape": "ellipse",
-                "style": "filled",
-                "fillcolor": "#f4cccc",
-                "color": "#b45f06",
+                "shape": "cylinder",
+                "style": "filled,bold",
+                "fillcolor": "#fbe5d6",
+                "color": "#a65e2e",
             },
             "pool": {
                 "shape": "ellipse",
@@ -864,13 +964,46 @@ def render_general_diagram(diagram: dict, output_name: str = "final_diagram") ->
 
         return node
 
-    def normalize_edge_attrs(edge: dict, src_level: int, dst_level: int, layout_hint: str) -> dict:
+    def edge_priority(src_node: dict, dst_node: dict, src_level: int, dst_level: int) -> int:
+        src_kind = str(src_node.get("kind", "")).lower()
+        dst_kind = str(dst_node.get("kind", "")).lower()
+
+        if src_kind == "input" and dst_kind == "conv":
+            return 0
+        if src_kind == "conv" and dst_kind == "block":
+            return 1
+        if src_kind == "block" and dst_kind == "output":
+            return 2
+        if src_kind == "block" and dst_kind == "block":
+            return 3
+        if src_kind == "conv" and dst_kind == "output":
+            return 5
+        if abs(dst_level - src_level) > 1:
+            return 6
+        return 4
+
+    def normalize_edge_attrs(edge: dict, src_node: dict, dst_node: dict, src_level: int, dst_level: int, layout_hint: str) -> dict | None:
         raw_style = edge.get("style", "solid")
 
+        label = edge.get("label", "")
+        if not isinstance(label, str):
+            label = ""
+        label = label.strip()
+
+        if label in {"", "->", "-->", "=>", "→"}:
+            label = ""
+        if len(label) > 18:
+            label = ""
+        if layout_hint == "general":
+            label = ""
+
+        if abs(dst_level - src_level) > 2:
+            return None
+
         edge_kwargs = {
-            "color": "#555555",
+            "color": "#666666",
             "style": "solid",
-            "penwidth": "1.1",
+            "penwidth": "1.0",
         }
 
         raw_color = edge.get("color")
@@ -883,10 +1016,7 @@ def render_general_diagram(diagram: dict, output_name: str = "final_diagram") ->
         if isinstance(raw_style, dict):
             arrowhead = raw_style.get("arrowhead")
             if isinstance(arrowhead, str) and arrowhead.strip():
-                if arrowhead.strip().lower() == "triangle":
-                    edge_kwargs["arrowhead"] = "normal"
-                else:
-                    edge_kwargs["arrowhead"] = arrowhead.strip()
+                edge_kwargs["arrowhead"] = "normal" if arrowhead.strip().lower() == "triangle" else arrowhead.strip()
 
             line_style = raw_style.get("line_style")
             if isinstance(line_style, str) and line_style.strip():
@@ -900,28 +1030,31 @@ def render_general_diagram(diagram: dict, output_name: str = "final_diagram") ->
             if penwidth is not None:
                 edge_kwargs["penwidth"] = str(penwidth)
 
-        label = edge.get("label", "")
-        if not isinstance(label, str):
-            label = ""
-        label = label.strip()
+        src_kind = str(src_node.get("kind", "")).lower()
+        dst_kind = str(dst_node.get("kind", "")).lower()
 
-        if label in {"", "->", "-->", "=>", "→"}:
-            label = ""
-
-        if len(label) > 22:
-            label = ""
-
-        if layout_hint == "general":
-            label = ""
+        if (
+            (src_kind == "input" and dst_kind == "conv")
+            or (src_kind == "conv" and dst_kind == "block")
+            or (src_kind == "block" and dst_kind == "output")
+        ):
+            edge_kwargs["color"] = "#555555"
+            edge_kwargs["penwidth"] = "1.2"
+            edge_kwargs["constraint"] = "true"
+            edge_kwargs["minlen"] = "1"
+        elif src_kind == "block" and dst_kind == "block":
+            edge_kwargs["color"] = "#777777"
+            edge_kwargs["penwidth"] = "0.9"
+            edge_kwargs["constraint"] = "false"
+            edge_kwargs["minlen"] = "1"
+        elif abs(dst_level - src_level) > 1 or (src_kind == "conv" and dst_kind == "output"):
+            edge_kwargs["color"] = "#AAAAAA"
+            edge_kwargs["penwidth"] = "0.8"
+            edge_kwargs["constraint"] = "false"
+            edge_kwargs["minlen"] = "1"
 
         if label:
             edge_kwargs["label"] = label
-
-        if abs(dst_level - src_level) > 1:
-            edge_kwargs["constraint"] = "false"
-            edge_kwargs["color"] = "#777777"
-            edge_kwargs["penwidth"] = "0.9"
-            edge_kwargs["minlen"] = "2"
 
         return edge_kwargs
 
@@ -934,9 +1067,9 @@ def render_general_diagram(diagram: dict, output_name: str = "final_diagram") ->
         splines="polyline",
         newrank="true",
         overlap="false",
-        nodesep="0.24",
-        ranksep="0.55",
-        pad="0.20",
+        nodesep="0.26",
+        ranksep="0.48",
+        pad="0.16",
         bgcolor="white",
     )
 
@@ -956,8 +1089,9 @@ def render_general_diagram(diagram: dict, output_name: str = "final_diagram") ->
 
     styled_nodes = [apply_default_style(n) for n in diagram.get("nodes", [])]
 
-    node_levels = {}
-    level_groups = {}
+    node_by_id: dict[str, dict] = {}
+    node_levels: dict[str, int] = {}
+    level_groups: dict[int, list[dict]] = {}
 
     for node in styled_nodes:
         node_id = node["id"]
@@ -965,20 +1099,14 @@ def render_general_diagram(diagram: dict, output_name: str = "final_diagram") ->
         kind = node.get("kind")
         level = get_node_level(node_id, label, kind)
 
+        node_by_id[node_id] = node
         node_levels[node_id] = level
         level_groups.setdefault(level, []).append(node)
 
     for level in level_groups:
-        level_groups[level] = sorted(
-            level_groups[level], key=get_general_node_sort_key)
+        level_groups[level] = sorted(level_groups[level], key=get_general_node_sort_key)
 
-    max_per_row_by_level = {
-        0: 2,
-        1: 2,
-        2: 3,
-        3: 3,
-    }
-
+    max_per_row_by_level = {0: 3, 1: 3, 2: 4, 3: 4}
     sorted_levels = sorted(level_groups.keys())
 
     for level in sorted_levels:
@@ -1003,31 +1131,53 @@ def render_general_diagram(diagram: dict, output_name: str = "final_diagram") ->
                     )
 
                     if previous_id is not None:
-                        sub.edge(
-                            previous_id,
-                            node["id"],
-                            style="invis",
-                            weight="10",
-                        )
+                        sub.edge(previous_id, node["id"], style="invis", weight="10")
                     previous_id = node["id"]
 
+    prepared_edges = []
+    seen = set()
+
     for edge in diagram.get("edges", []):
-        src = edge.get("source")
-        dst = edge.get("target")
+        src = str(edge.get("source", "")).strip()
+        dst = str(edge.get("target", "")).strip()
 
         if not src or not dst or src == dst:
             continue
+        if src not in node_by_id or dst not in node_by_id:
+            continue
 
+        key = (src, dst)
+        if key in seen:
+            continue
+        seen.add(key)
+
+        src_node = node_by_id[src]
+        dst_node = node_by_id[dst]
         src_level = node_levels.get(src, 2)
         dst_level = node_levels.get(dst, 2)
 
         edge_kwargs = normalize_edge_attrs(
             edge=edge,
+            src_node=src_node,
+            dst_node=dst_node,
             src_level=src_level,
             dst_level=dst_level,
             layout_hint=diagram.get("layout_hint", "general"),
         )
 
+        if edge_kwargs is None:
+            continue
+
+        prepared_edges.append((
+            edge_priority(src_node, dst_node, src_level, dst_level),
+            src,
+            dst,
+            edge_kwargs,
+        ))
+
+    prepared_edges.sort(key=lambda x: x[0])
+
+    for _, src, dst, edge_kwargs in prepared_edges:
         dot.edge(src, dst, **edge_kwargs)
 
     dot.filename = f"{output_name}.gv"
@@ -1307,9 +1457,6 @@ def render_diagram(diagram: dict, output_name: str = "diagram"):
     renderer = diagram.get("renderer", "")
     layout_hint = diagram.get("layout_hint", "")
 
-    if renderer == "general" or layout_hint == "general":
-        return render_general_diagram(diagram, output_name)
-
     if renderer == "plotneuralnet" or layout_hint == "model_architecture":
         plot_renderer = build_model_renderer(diagram, project_root=".")
         return plot_renderer.render(diagram, output_name=output_name)
@@ -1476,18 +1623,7 @@ def improve_diagram(
         improved = extract_json(raw_answer)
         improved = clean_diagram_labels(improved)
         improved = restore_node_kinds(draft_json, improved)
-
-        should_force_general = (
-            draft_json.get("renderer") == "general"
-            or draft_json.get("layout_hint") == "general"
-            or looks_like_general_request(user_task)
-        )
-
-        if should_force_general:
-            improved = force_general_contract(improved, fallback=draft_json)
-        else:
-            improved = normalize_general_diagram(improved, fallback=draft_json)
-
+        improved = normalize_general_diagram(improved, fallback=draft_json)
         return improved
     except Exception:
         print("Ошибка парсинга improve-ответа. Возвращаю draft_json.")
@@ -1517,7 +1653,6 @@ def normalize_general_diagram(diagram: dict, fallback: dict | None = None) -> di
 
     result.setdefault("title", "Архитектура системы")
     result["title"] = clean_visible_label(result.get("title", "Архитектура системы"))
-
     result["layout_hint"] = "general"
     result["renderer"] = "general"
 
@@ -1532,18 +1667,15 @@ def normalize_general_diagram(diagram: dict, fallback: dict | None = None) -> di
         "user": "input",
         "external": "input",
         "input": "input",
-
         "ui": "conv",
         "interface": "conv",
         "frontend": "conv",
         "api": "conv",
         "conv": "conv",
-
         "service": "block",
         "module": "block",
         "processor": "block",
         "block": "block",
-
         "database": "output",
         "db": "output",
         "storage": "output",
@@ -1551,7 +1683,7 @@ def normalize_general_diagram(diagram: dict, fallback: dict | None = None) -> di
         "output": "output",
     }
 
-    fallback_nodes = {}
+    fallback_nodes: dict[str, dict] = {}
     for node in fallback.get("nodes", []):
         node_id = str(node.get("id", "")).strip()
         if node_id:
@@ -1562,6 +1694,37 @@ def normalize_general_diagram(diagram: dict, fallback: dict | None = None) -> di
         text = re.sub(r"\s+", " ", text).strip()
         text = clean_visible_label(text)
         return text if text != "Компонент" else "Узел"
+
+    def force_kind_from_label(cleaned_label: str, node_id: str, current_kind: str) -> str:
+        t = f"{node_id} {cleaned_label}".lower()
+        t = t.replace("_", " ").replace("-", " ")
+        t = re.sub(r"\s+", " ", t).strip()
+
+        actor_markers = [
+            "студент", "преподаватель", "администратор", "клиент", "оператор",
+            "аналитик", "менеджер", "инженер", "руководитель"
+        ]
+        interface_markers = [
+            "веб", "портал", "интерфейс", "api", "шлюз", "панель",
+            "приложение", "веб-портал", "веб-интерфейс", "веб-приложение"
+        ]
+        storage_markers = ["база", "хранилище", "архив", "репозиторий"]
+        service_markers = [
+            "сервис", "модуль", "обработка", "загрузка", "мониторинг",
+            "уведомления", "аналитика", "аутентификация", "платежи",
+            "доставка", "заказы", "сделки", "лиды", "отчеты", "отчёты",
+            "контроль sla"
+        ]
+
+        if any(x in t for x in storage_markers):
+            return "output"
+        if any(x in t for x in interface_markers):
+            return "conv"
+        if any(x in t for x in service_markers):
+            return "block"
+        if any(x in t for x in actor_markers):
+            return "input"
+        return current_kind
 
     new_nodes = []
     seen_ids = set()
@@ -1577,7 +1740,6 @@ def normalize_general_diagram(diagram: dict, fallback: dict | None = None) -> di
         raw_label = node.get("label", node_id)
         cleaned_label = clean_visible_label(raw_label)
 
-        # если модель дала слишком общий label — пытаемся спасти его из fallback/id
         if cleaned_label == "Компонент":
             fb = fallback_nodes.get(node_id, {})
             fb_label = clean_visible_label(fb.get("label", ""))
@@ -1596,20 +1758,7 @@ def normalize_general_diagram(diagram: dict, fallback: dict | None = None) -> di
             else:
                 kind = infer_general_kind_from_label(cleaned_label, node_id)
 
-        # если актор случайно стал базой/сервисом — подправляем
-        actor_markers = [
-            "студент", "преподаватель", "администратор", "клиент", "оператор",
-            "аналитик", "менеджер", "инженер", "руководитель"
-        ]
-        if any(x in cleaned_label.lower() for x in actor_markers):
-            kind = "input"
-
-        if "база" in cleaned_label.lower() or "хранилище" in cleaned_label.lower():
-            kind = "output"
-
-        if any(x in cleaned_label.lower() for x in ["веб", "портал", "интерфейс", "api", "шлюз", "панель"]):
-            if kind != "input":
-                kind = "conv"
+        kind = force_kind_from_label(cleaned_label, node_id, kind)
 
         new_nodes.append({
             **node,
@@ -1632,10 +1781,20 @@ def normalize_general_diagram(diagram: dict, fallback: dict | None = None) -> di
         if source not in valid_ids or target not in valid_ids:
             continue
 
+        src_node = next((n for n in new_nodes if n["id"] == source), None)
+        dst_node = next((n for n in new_nodes if n["id"] == target), None)
+        if not src_node or not dst_node:
+            continue
+
+        src_level = get_node_level(source, src_node.get("label", ""), src_node.get("kind"))
+        dst_level = get_node_level(target, dst_node.get("label", ""), dst_node.get("kind"))
+
+        if abs(dst_level - src_level) > 2:
+            continue
+
         label = str(edge.get("label", "")).strip()
         if label in {"", "->", "-->", "=>", "→"}:
             label = ""
-
         if len(label) > 18:
             label = ""
 
@@ -1649,6 +1808,7 @@ def normalize_general_diagram(diagram: dict, fallback: dict | None = None) -> di
     result["edges"] = cleaned_edges
 
     return result
+
 
 def analyze_reference_image(image_path: str) -> dict:
     image_data_url = image_to_data_url(image_path)
@@ -1709,7 +1869,6 @@ def analyze_reference_image(image_path: str) -> dict:
 def generate_diagram(user_task: str, reference_description: dict | str | None = None) -> dict:
     def looks_like_general_request(text: str) -> bool:
         t = (text or "").lower()
-
         general_markers = [
             "архитектур", "система", "платформ", "сервис", "портал",
             "api", "gateway", "веб", "web", "база", "db", "database",
@@ -1722,69 +1881,49 @@ def generate_diagram(user_task: str, reference_description: dict | str | None = 
             "decoder", "bottleneck", "skip", "attention", "слой",
             "нейросет", "сегментац", "feature map", "plotneuralnet"
         ]
-
         g = sum(1 for x in general_markers if x in t)
         m = sum(1 for x in model_markers if x in t)
-
         return g >= 2 and m == 0
 
     def normalize_term_for_match(text: str) -> str:
-        s = clean_visible_label(text)
-        s = s.lower()
-        s = s.replace("ё", "е")
+        s = clean_visible_label(text).lower().replace("ё", "е")
         s = re.sub(r"[^a-zа-я0-9 ]+", " ", s)
         s = re.sub(r"\s+", " ", s).strip()
         return s
 
     def parse_named_section(text: str, section_name: str) -> list[str]:
-        """
-        Ищет фрагменты вида:
-        'Акторы: A, B, C. Компоненты: X, Y, Z.'
-        """
         pattern = rf"(?is){section_name}\s*:\s*(.+?)(?:\n[A-ЯA-Z][^:\n]{{0,40}}:|$)"
         m = re.search(pattern, text)
         if not m:
             return []
-
-        chunk = m.group(1)
-        chunk = chunk.replace("\n", " ")
+        chunk = m.group(1).replace("\n", " ")
         chunk = re.split(r"[.;]", chunk)[0]
-
         parts = [p.strip() for p in re.split(r",|/|\|", chunk) if p.strip()]
         result = []
-
         for p in parts:
             p = p.strip(" -")
-            if not p:
-                continue
-            if len(p) > 60:
-                continue
-            result.append(p)
-
+            if p and len(p) <= 60:
+                result.append(p)
         return result
 
     def extract_expected_entities(task_text: str) -> dict[str, list[str]]:
         text = task_text or ""
-
         actors = []
         components = []
         storages = []
 
         actors += parse_named_section(text, "Акторы")
         actors += parse_named_section(text, "Actors")
-
         components += parse_named_section(text, "Компоненты")
         components += parse_named_section(text, "Components")
         components += parse_named_section(text, "Основные блоки")
         components += parse_named_section(text, "Блоки")
 
-        # если база явно перечислена среди компонентов, дополнительно отнесём её в storages
         for item in components:
             low = item.lower()
             if any(x in low for x in [" db", "db", "database", "база", "хранилище", "store"]):
                 storages.append(item)
 
-        # fallback: грубая эвристика по роли в тексте
         role_words = [
             "студент", "преподаватель", "администратор", "клиент", "оператор",
             "аналитик", "менеджер", "инженер", "руководитель",
@@ -1798,29 +1937,18 @@ def generate_diagram(user_task: str, reference_description: dict | str | None = 
         actors = list(dict.fromkeys([a for a in actors if a]))
         components = list(dict.fromkeys([c for c in components if c]))
         storages = list(dict.fromkeys([s for s in storages if s]))
-
-        return {
-            "actors": actors,
-            "components": components,
-            "storages": storages,
-        }
+        return {"actors": actors, "components": components, "storages": storages}
 
     def candidate_task_fit_score(candidate: dict, task_text: str) -> int:
-        """
-        Добавочный task-aware score поверх score_general_candidate().
-        """
         expected = extract_expected_entities(task_text)
-
         labels = [
             normalize_term_for_match(n.get("label", ""))
             for n in candidate.get("nodes", [])
             if isinstance(n, dict)
         ]
         joined = " | ".join(labels)
-
         score = 0
 
-        # 1) покрытие акторов
         actor_hits = 0
         for actor in expected["actors"]:
             norm_actor = normalize_term_for_match(actor)
@@ -1832,19 +1960,17 @@ def generate_diagram(user_task: str, reference_description: dict | str | None = 
             else:
                 score -= 16
 
-        # 2) покрытие компонентов
         component_hits = 0
         for comp in expected["components"]:
             norm_comp = normalize_term_for_match(comp)
             if not norm_comp:
                 continue
             if norm_comp in joined:
-                component_hits += 1
+                component_hits += 8
                 score += 8
             else:
                 score -= 8
 
-        # 3) бонус за достаточное число входных ролей
         input_count = sum(
             1 for n in candidate.get("nodes", [])
             if isinstance(n, dict) and str(n.get("kind", "")).lower() == "input"
@@ -1854,7 +1980,6 @@ def generate_diagram(user_task: str, reference_description: dict | str | None = 
         elif len(expected["actors"]) >= 2 and input_count >= 2:
             score += 8
 
-        # 4) штраф за generic labels
         bad_generic = {"компонент", "узел", "сервис", "модуль", "данные", "база данных"}
         for node in candidate.get("nodes", []):
             if not isinstance(node, dict):
@@ -1863,7 +1988,6 @@ def generate_diagram(user_task: str, reference_description: dict | str | None = 
             if label in bad_generic:
                 score -= 25
 
-        # 5) штраф за недопокрытие вообще
         if expected["actors"] and actor_hits == 0:
             score -= 30
         if expected["components"] and component_hits < max(1, len(expected["components"]) // 3):
@@ -1872,13 +1996,11 @@ def generate_diagram(user_task: str, reference_description: dict | str | None = 
         return score
 
     configs = DIAGRAM_CONFIGS or load_diagram_types()
-
     mode = detect_diagram_mode(user_task, configs)
     if looks_like_general_request(user_task):
         mode = "general"
 
     config = get_diagram_config(mode, configs)
-
     system_prompt = config["system_prompt"]
     layout_hint = config.get("layout_hint", "general")
     extra_rules = "\n".join(f"- {rule}" for rule in config.get("extra_rules", []))
@@ -1943,8 +2065,6 @@ def generate_diagram(user_task: str, reference_description: dict | str | None = 
 
     best_candidate = None
     best_score = -10**9
-
-    # для general увеличиваем число попыток, чтобы был реальный выбор
     attempts = 5 if (layout_hint == "general" or general_override or mode == "general") else 3
 
     for attempt in range(attempts):
@@ -1966,7 +2086,6 @@ def generate_diagram(user_task: str, reference_description: dict | str | None = 
                 candidate = normalize_general_diagram(candidate)
                 candidate["layout_hint"] = "general"
                 candidate["renderer"] = "general"
-
                 style = candidate.get("style")
                 if not isinstance(style, dict):
                     style = {}
@@ -2014,33 +2133,168 @@ def generate_diagram(user_task: str, reference_description: dict | str | None = 
     }
 
 
+def ensure_minimal_diagram(diagram: dict | None) -> dict:
+    """
+    Гарантирует, что diagram всегда валиден и не ломает рендер.
+    """
+    if not isinstance(diagram, dict):
+        return {
+            "title": "Fallback Diagram",
+            "layout_hint": "general",
+            "renderer": "general",
+            "style": {"direction": "TB"},
+            "nodes": [
+                {"id": "n1", "label": "Вход", "kind": "input"},
+                {"id": "n2", "label": "Обработка", "kind": "block"},
+                {"id": "n3", "label": "Выход", "kind": "output"},
+            ],
+            "edges": [
+                {"source": "n1", "target": "n2"},
+                {"source": "n2", "target": "n3"},
+            ],
+        }
+
+    nodes = diagram.get("nodes")
+    edges = diagram.get("edges")
+
+    if not isinstance(nodes, list) or len(nodes) == 0:
+        diagram["nodes"] = [
+            {"id": "n1", "label": "Вход", "kind": "input"},
+            {"id": "n2", "label": "Обработка", "kind": "block"},
+            {"id": "n3", "label": "Выход", "kind": "output"},
+        ]
+
+    if not isinstance(edges, list):
+        diagram["edges"] = []
+
+    clean_nodes = []
+    seen = set()
+    for node in diagram["nodes"]:
+        if not isinstance(node, dict):
+            continue
+        node_id = str(node.get("id", "")).strip()
+        if not node_id or node_id in seen:
+            continue
+        seen.add(node_id)
+        label = clean_visible_label(node.get("label", node_id))
+        kind = str(node.get("kind", "")).strip().lower()
+        if kind not in {"input", "conv", "block", "output"}:
+            kind = infer_general_kind_from_label(label, node_id)
+        clean_nodes.append({"id": node_id, "label": label, "kind": kind})
+
+    if not clean_nodes:
+        clean_nodes = [
+            {"id": "n1", "label": "Вход", "kind": "input"},
+            {"id": "n2", "label": "Обработка", "kind": "block"},
+            {"id": "n3", "label": "Выход", "kind": "output"},
+        ]
+
+    diagram["nodes"] = clean_nodes
+    valid_ids = {n["id"] for n in clean_nodes}
+
+    clean_edges = []
+    for edge in diagram.get("edges", []):
+        if not isinstance(edge, dict):
+            continue
+        src = str(edge.get("source", "")).strip()
+        dst = str(edge.get("target", "")).strip()
+        if src in valid_ids and dst in valid_ids and src != dst:
+            clean_edges.append({"source": src, "target": dst, "label": str(edge.get("label", "")).strip()})
+
+    diagram["edges"] = clean_edges
+
+    if len(diagram["nodes"]) == 1:
+        diagram["nodes"].append({"id": "n_extra", "label": "Дополнительно", "kind": "block"})
+        diagram["edges"].append({"source": diagram["nodes"][0]["id"], "target": "n_extra"})
+
+    diagram.setdefault("title", "Архитектура системы")
+    diagram["title"] = clean_visible_label(diagram.get("title", "Архитектура системы"))
+    diagram["layout_hint"] = "general"
+    diagram["renderer"] = "general"
+    style = diagram.get("style")
+    if not isinstance(style, dict):
+        style = {}
+    style.setdefault("direction", "TB")
+    diagram["style"] = style
+
+    return diagram
+
+
+def safe_render(diagram: dict, renderer_func, output_name: str):
+    try:
+        if not diagram:
+            print("[WARN] diagram is empty")
+            return None
+        result = renderer_func(diagram, output_name=output_name)
+        if not result:
+            print("[WARN] render returned empty result")
+            return None
+        return result
+    except Exception as e:
+        print("[ERROR] render failed:", str(e))
+        return None
+
+
+def save_json_artifact(name: str, data: dict) -> None:
+    try:
+        Path(name).write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    except Exception as e:
+        print(f"[WARN] failed to save {name}: {e}")
 
 def main():
     default_prompt = """2д схема автосервиса"""
     user_task = load_user_prompt(default_prompt)
-
-    # Референсы теперь пустые по умолчанию. Скрипт будет подтягивать 
-    # только те файлы, что лежат в папке references/ (если они там есть).
     references = []
 
     print("=== ШАГ 1: Генерация черновика ===")
     draft = generate_diagram(user_task, references)
+    draft = ensure_minimal_diagram(draft)
+    save_json_artifact("draft.json", draft)
     print(json.dumps(draft, ensure_ascii=False, indent=2))
 
     print("\n=== ШАГ 2: Критика ===")
-    critique = critique_diagram(user_task, draft, references)
+    try:
+        critique = critique_diagram(user_task, draft, references)
+    except Exception as e:
+        print(f"[WARN] critique failed: {e}")
+        critique = {
+            "score": 0.0,
+            "task_fit_score": 0.0,
+            "visual_score": 0.0,
+            "missing_requirements": [],
+            "wrong_interpretations": [],
+            "extra_elements": [],
+            "visual_problems": [],
+            "problems": [f"critique failed: {e}"],
+            "fixes": [],
+        }
+    save_json_artifact("critique.json", critique)
     print(json.dumps(critique, ensure_ascii=False, indent=2))
 
     print("\n=== ШАГ 3: Исправление ===")
-    final = improve_diagram(user_task, draft, critique)
+    try:
+        final = improve_diagram(user_task, draft, critique)
+    except Exception as e:
+        print(f"[WARN] improve failed: {e}")
+        final = draft
+
+    final = ensure_minimal_diagram(final)
+    final = clean_diagram_labels(final)
+    final = normalize_general_diagram(final, fallback=draft)
+    final = ensure_minimal_diagram(final)
+    save_json_artifact("final.json", final)
     print(json.dumps(final, ensure_ascii=False, indent=2))
 
-    final_clean = clean_diagram_labels(final)
-    
     output_filename = f"diagram_{int(time.time())}"
-    render_diagram(final_clean, output_filename)
+    render_result = safe_render(final, render_general_diagram, output_filename)
 
-    pass
+    if render_result is None:
+        print("[WARN] general render failed, retry with minimal fallback")
+        fallback_diagram = ensure_minimal_diagram(None)
+        save_json_artifact("final.json", fallback_diagram)
+        safe_render(fallback_diagram, render_general_diagram, output_filename)
+
+    return final
 
 
 if __name__ == "__main__":
