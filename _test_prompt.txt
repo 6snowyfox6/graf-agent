@@ -1,1 +1,113 @@
-Построй общую архитектуру аналитической платформы. Акторы: Analyst, Data Engineer, Admin. Компоненты: Dashboard, API Gateway, Ingestion Service, Processing Service, Feature Store, Model Service, Monitoring, Metadata DB, Results DB. Нужна строгая научно-деловая подача, компактная композиция и минимальная перегрузка подписями.
+Построй 3D архитектурную схему SoftXAI в стиле PlotNeuralNet.
+
+Это должна быть именно архитектурная схема модели, а не обычная 2D блок-схема, не flowchart и не general diagram.
+Нужно интерпретировать SoftXAI как многоуровневую гибридную explainable architecture.
+
+=== ГЛАВНАЯ СТРУКТУРА ===
+
+Схема должна иметь 3 главных уровня слева направо:
+
+1. Нижний / вычислительный уровень (Encoder / Computational Backbone)
+- CNN
+- Transformer
+- Graph Model
+- ANFIS
+- Hybrid Classifier
+- Multimodal Module
+
+Из этого уровня выходят:
+- Hidden Representations
+- Attention Maps
+- Latent Features
+- Intermediate States
+
+2. Средний / логический уровень (Bottleneck / Explainability Core)
+Это центральное логическое ядро SoftXAI:
+- Domain Concepts
+- IF-THEN Rules
+- Constraints
+- Uncertainty Estimation
+- Fuzzy Logic
+- Neuro-Symbolic Inference
+- Differentiable Logical Reasoning
+
+Этот уровень должен быть главным визуальным центром схемы.
+
+3. Верхний / explanatory level (Decoder / Explanation Layer)
+- Local Explanations
+- Global Explanations
+- Hierarchical Explanations
+- Adaptive Explanations
+- Language Packaging
+- LLM Interface
+- User Dialogue
+
+=== ДОПОЛНИТЕЛЬНЫЕ БЛОКИ ===
+
+Справа как выходные / auxiliary heads показать:
+- SoftXAI Metrics
+  - Faithfulness
+  - Stability
+  - Semantic Relevance
+  - Interpretability
+  - Decision Utility
+
+Ещё правее или ниже компактно показать:
+- XAI 2.0 Architectures
+  - Type-2 ANFIS
+  - FAN
+  - Differentiable Fuzzy Attention
+  - Explainable CNN
+  - Hierarchical Explainable Systems
+
+И как финальные application heads:
+- Medical Diagnosis
+- Image Processing
+- Physiological Signals
+- Ecological Monitoring
+- Risk Stratification
+- Operator Support
+
+=== ВИЗУАЛЬНАЯ ЛОГИКА ===
+
+- основной поток строго слева направо
+- backbone -> explainability core -> explanation layer
+- центральный bottleneck должен быть выделен
+- explanation layer должен зависеть от logical core, а не заменять его
+- LLM должен быть частью explanation layer, а не центральным вычислительным ядром
+- skip-like / auxiliary connections допустимы только аккуратно
+- не перегружать схему большим числом связей
+- избегать спагетти и пересечений
+
+=== ТРЕБОВАНИЯ К СТИЛЮ ===
+
+- стиль как в научной статье
+- все основные блоки объемные, 3D
+- использовать PlotNeuralNet-like architectural modules
+- backbone modules как 3D blocks
+- logical core как отдельный центральный bottleneck
+- explanation layer как decoder / output heads
+- metrics и applications как compact side heads
+- никаких плоских 2D прямоугольников
+- никаких business diagram / web architecture элементов
+- никаких user -> api -> service -> db шаблонов
+
+=== ПОДПИСИ ===
+
+- короткие
+- технические
+- лучше на английском, единообразно
+- без длинных предложений внутри блоков
+
+=== ЖЕСТКИЕ ОГРАНИЧЕНИЯ ===
+
+- renderer = plotneuralnet
+- layout_hint = model_architecture
+- это именно 3D architecture diagram
+- не general
+- не infographic
+- не flowchart
+- не 2D concept map
+renderer = plotneuralnet
+layout_hint = model_architecture
+Если результат выглядит как обычная 2D блок-схема, он считается неправильным.
