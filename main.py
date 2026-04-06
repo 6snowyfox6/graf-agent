@@ -257,19 +257,23 @@ def ask_llm(
     return data["choices"][0]["message"]["content"]
 
 
-def extract_json(text: str) -> dict: 
-    
+def extract_json(text: str) -> dict:
     text = text.strip()
+
+    # убрать markdown fences
+    text = re.sub(r"^\s*```json\s*", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"^\s*```\s*", "", text)
+    text = re.sub(r"\s*```\s*$", "", text)
 
     decoder = json.JSONDecoder()
 
-    # пробуем найти первый JSON-объект в тексте
+    # пробуем найти первый полноценный JSON-объект в тексте
     for start_idx, ch in enumerate(text):
         if ch != "{":
             continue
 
         try:
-            obj, end_idx = decoder.raw_decode(text[start_idx:])
+            obj, _ = decoder.raw_decode(text[start_idx:])
             if isinstance(obj, dict):
                 return obj
         except json.JSONDecodeError:
@@ -1188,7 +1192,8 @@ def critique_diagram(user_task: str, draft_json: dict, references: list[dict] | 
         "если они нужны пайплайну рендера. "
         "К таким полям относятся title, renderer, layout_hint, style, nodes[].kind и другие системные поля. "
         "Ты можешь критиковать только смысл схемы, состав элементов, связи, читаемость и визуальную организацию. "
-        "Нельзя предлагать менять JSON-контракт проекта."
+        "Нельзя предлагать менять JSON-контракт проекта. "
+        "Верни строго один валидный JSON-объект, без markdown-блоков и без дополнительного текста."
     )
 
     user_prompt = f"""
@@ -1218,6 +1223,12 @@ def critique_diagram(user_task: str, draft_json: dict, references: list[dict] | 
    - что интерпретировано неверно
    - что мешает читаемости
 
+КРИТИЧЕСКОЕ ТРЕБОВАНИЕ:
+- верни только один JSON-объект;
+- не используй ```json;
+- не обрывай ответ;
+- если замечаний мало, всё равно верни полный JSON по схеме ниже.
+
 Верни JSON строго такого вида:
 {{
   "score": 0.0,
@@ -1232,7 +1243,22 @@ def critique_diagram(user_task: str, draft_json: dict, references: list[dict] | 
 }}
 """
     raw_answer = ask_llm(CRITIC_MODEL, system_prompt, user_prompt)
-    return extract_json(raw_answer)
+
+    try:
+        return extract_json(raw_answer)
+    except Exception as e:
+        print(f"[WARN] critique parse failed: {e}")
+        return {
+            "score": 0.0,
+            "task_fit_score": 0.0,
+            "visual_score": 0.0,
+            "missing_requirements": [],
+            "wrong_interpretations": [],
+            "extra_elements": [],
+            "visual_problems": ["Критик вернул битый или обрезанный JSON"],
+            "problems": [f"critique parse failed: {e}"],
+            "fixes": ["Повторить критику или использовать черновую схему без изменений"],
+        }
 
 
 def _balance_parentheses(text: str) -> str:
@@ -1656,6 +1682,7 @@ def main():
 
     print("\n=== ШАГ 2: Критика ===")
     critique = critique_diagram(user_task, draft, references)
+    save_json_artifact("critique.json", critique)
     print(json.dumps(critique, ensure_ascii=False, indent=2))
 
     print("\n=== ШАГ 3: Исправление ===")

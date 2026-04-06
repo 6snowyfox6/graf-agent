@@ -1,113 +1,86 @@
-Построй 3D архитектурную схему SoftXAI в стиле PlotNeuralNet.
+Построй 2D general-схему SoftXAI как компактную научную архитектурную рамку.
 
-Это должна быть именно архитектурная схема модели, а не обычная 2D блок-схема, не flowchart и не general diagram.
-Нужно интерпретировать SoftXAI как многоуровневую гибридную explainable architecture.
+Это не веб-архитектура, не бизнес-процесс и не PlotNeuralNet.
+Не использовать шаблон user → web → api → service → db.
 
-=== ГЛАВНАЯ СТРУКТУРА ===
+Схема должна содержать ровно 9 узлов:
 
-Схема должна иметь 3 главных уровня слева направо:
+1. Вычислительный уровень
+2. Логическое ядро SoftXAI
+3. Объяснение и коммуникация
+4. XAI 2.0
+5. Мягкие измерения
+6. Встроенная измеримая объяснимость
+7. Метрики SoftXAI
+8. Архитектуры XAI 2.0
+9. Прикладные области
 
-1. Нижний / вычислительный уровень (Encoder / Computational Backbone)
-- CNN
-- Transformer
-- Graph Model
-- ANFIS
-- Hybrid Classifier
-- Multimodal Module
+Смысл узлов:
 
-Из этого уровня выходят:
-- Hidden Representations
-- Attention Maps
-- Latent Features
-- Intermediate States
+- Вычислительный уровень:
+  CNN, Transformer, Graph Model, ANFIS, гибридные и мультимодальные модели, скрытые представления, attention, латентные признаки
 
-2. Средний / логический уровень (Bottleneck / Explainability Core)
-Это центральное логическое ядро SoftXAI:
-- Domain Concepts
-- IF-THEN Rules
-- Constraints
-- Uncertainty Estimation
-- Fuzzy Logic
-- Neuro-Symbolic Inference
-- Differentiable Logical Reasoning
+- Логическое ядро SoftXAI:
+  концепты предметной области, правила ЕСЛИ–ТО, ограничения, неопределенность, нечеткая логика, нейро-символьный вывод
 
-Этот уровень должен быть главным визуальным центром схемы.
+- Объяснение и коммуникация:
+  локальные, глобальные, иерархические, адаптивные объяснения, языковая упаковка, диалог с пользователем, LLM как интерфейс
 
-3. Верхний / explanatory level (Decoder / Explanation Layer)
-- Local Explanations
-- Global Explanations
-- Hierarchical Explanations
-- Adaptive Explanations
-- Language Packaging
-- LLM Interface
-- User Dialogue
+- Метрики SoftXAI:
+  faithfulness, stability, semantic relevance, interpretability, decision utility
 
-=== ДОПОЛНИТЕЛЬНЫЕ БЛОКИ ===
+- Архитектуры XAI 2.0:
+  Type-2 ANFIS, FAN, fuzzy attention, explainable CNN, hierarchical explainable systems
 
-Справа как выходные / auxiliary heads показать:
-- SoftXAI Metrics
-  - Faithfulness
-  - Stability
-  - Semantic Relevance
-  - Interpretability
-  - Decision Utility
+- Прикладные области:
+  медицинская диагностика, обработка изображений, физиологические сигналы, экологический мониторинг, стратификация риска, поддержка оператора
 
-Ещё правее или ниже компактно показать:
-- XAI 2.0 Architectures
-  - Type-2 ANFIS
-  - FAN
-  - Differentiable Fuzzy Attention
-  - Explainable CNN
-  - Hierarchical Explainable Systems
+Обязательная структура:
 
-И как финальные application heads:
-- Medical Diagnosis
-- Image Processing
-- Physiological Signals
-- Ecological Monitoring
-- Risk Stratification
-- Operator Support
+Центральная вертикальная ось:
+Вычислительный уровень
+↓
+Логическое ядро SoftXAI
+↓
+Объяснение и коммуникация
 
-=== ВИЗУАЛЬНАЯ ЛОГИКА ===
+Левый блок:
+XAI 2.0
+Мягкие измерения
+↓
+Встроенная измеримая объяснимость
 
-- основной поток строго слева направо
-- backbone -> explainability core -> explanation layer
-- центральный bottleneck должен быть выделен
-- explanation layer должен зависеть от logical core, а не заменять его
-- LLM должен быть частью explanation layer, а не центральным вычислительным ядром
-- skip-like / auxiliary connections допустимы только аккуратно
-- не перегружать схему большим числом связей
-- избегать спагетти и пересечений
+Правый блок:
+Метрики SoftXAI
+↓
+Архитектуры XAI 2.0
+↓
+Прикладные области
 
-=== ТРЕБОВАНИЯ К СТИЛЮ ===
+Обязательные связи:
+- Вычислительный уровень → Логическое ядро SoftXAI
+- Логическое ядро SoftXAI → Объяснение и коммуникация
+- XAI 2.0 → Встроенная измеримая объяснимость
+- Мягкие измерения → Встроенная измеримая объяснимость
+- Встроенная измеримая объяснимость → Логическое ядро SoftXAI
+- Логическое ядро SoftXAI → Метрики SoftXAI
+- Логическое ядро SoftXAI → Архитектуры XAI 2.0
+- Архитектуры XAI 2.0 → Прикладные области
 
-- стиль как в научной статье
-- все основные блоки объемные, 3D
-- использовать PlotNeuralNet-like architectural modules
-- backbone modules как 3D blocks
-- logical core как отдельный центральный bottleneck
-- explanation layer как decoder / output heads
-- metrics и applications как compact side heads
-- никаких плоских 2D прямоугольников
-- никаких business diagram / web architecture элементов
-- никаких user -> api -> service -> db шаблонов
+Жёсткие ограничения:
+- renderer = general
+- layout_hint = general
+- строго 2D
+- строго 9 узлов
+- короткие подписи
+- без лишних узлов
+- без лишних связей
+- без пересечений по возможности
+- без длинной горизонтальной гирлянды
+- без лесенки
+- без web/api/service/db
+- без flowchart логики
 
-=== ПОДПИСИ ===
+Итог должен выглядеть как компактная научная схема диссертационной концепции SoftXAI.
 
-- короткие
-- технические
-- лучше на английском, единообразно
-- без длинных предложений внутри блоков
-
-=== ЖЕСТКИЕ ОГРАНИЧЕНИЯ ===
-
-- renderer = plotneuralnet
-- layout_hint = model_architecture
-- это именно 3D architecture diagram
-- не general
-- не infographic
-- не flowchart
-- не 2D concept map
-renderer = plotneuralnet
-layout_hint = model_architecture
-Если результат выглядит как обычная 2D блок-схема, он считается неправильным.
+Верни только валидный JSON без markdown и без пояснений.
