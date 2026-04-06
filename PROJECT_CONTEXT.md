@@ -40,3 +40,18 @@ Build an AI diagram agent that supports:
 - LLM should infer major architectural modules
 - support hybrid / new / unknown model families
 - keep architecture outputs compact and article-like
+
+## Critic Influence Analytics (SHAP)
+- Pipeline now supports optional critic influence analysis between `critique` and `improve`.
+- Per-run artifacts are written to `outputs/<run_id>/`:
+  - `critic_influence_report.json`
+  - `critic_influence_summary.md`
+  - optional SHAP plots: `critic_shap_beeswarm.png`, `critic_shap_bar.png`
+- History is accumulated in `outputs/_critic_influence_history.jsonl`.
+- Interpretation is surrogate-based:
+  - features come from critique fields (scores, counts, text sizes),
+  - targets come from draft->final structural deltas (node/edge/label/kind changes),
+  - SHAP is used when available; safe fallback is used otherwise.
+- CLI switch:
+  - `--explain-critic-influence on|off` (default: `on`)
+  - `--no-auto-servers` to run without server auto-start.

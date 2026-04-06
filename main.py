@@ -1,4 +1,5 @@
 import os
+import argparse
 import base64
 import mimetypes
 import json
@@ -12,6 +13,7 @@ from plotneuralnet_renderer import PlotNeuralNetRenderer, build_model_renderer
 from infographic_renderer import InfographicRenderer
 from graphviz import Digraph
 from server_manager import ServerManager
+from critic_influence import CriticInfluenceAnalyzer
 
 # Локальные endpoints llama-cpp-python
 # Qwen (генератор) на порту 8000, Gemma (критик/vision) на порту 8001
@@ -30,6 +32,14 @@ MODEL_ENDPOINTS: dict[str, str] = {
 
 def _get_endpoint(model: str) -> str:
     return MODEL_ENDPOINTS.get(model, QWEN_URL)
+
+
+def save_json_artifact(filename: str, data: Any, base_dir: str | Path = ".") -> Path:
+    out_dir = Path(base_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    target = out_dir / filename
+    target.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    return target
 
 def load_user_prompt(default_prompt: str) -> str:
     test_prompt_path = Path("_test_prompt.txt")
@@ -675,7 +685,11 @@ def score_general_candidate(diagram: dict) -> int:
     return score
 
 
-def render_general_diagram(diagram: dict, output_name: str = "final_diagram") -> str:
+def render_general_diagram(
+    diagram: dict,
+    output_name: str = "final_diagram",
+    output_dir: str | Path = "outputs",
+) -> str:
     def chunk_nodes(items, size):
         if size <= 0:
             size = 3
@@ -785,7 +799,7 @@ def render_general_diagram(diagram: dict, output_name: str = "final_diagram") ->
 
         return edge_kwargs
 
-    output_dir = Path("outputs")
+    output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
     dot = Digraph(comment=diagram.get("title", "Diagram"))
@@ -905,7 +919,11 @@ def render_general_diagram(diagram: dict, output_name: str = "final_diagram") ->
     return png_path
 
 
-def render_pipeline_diagram(diagram: dict, output_name: str = "diagram"):
+def render_pipeline_diagram(
+    diagram: dict,
+    output_name: str = "diagram",
+    output_dir: str | Path = "outputs",
+):
     from graphviz import Digraph
 
     dot = Digraph(comment=diagram.get("title", "Pipeline"))
@@ -1028,13 +1046,19 @@ def render_pipeline_diagram(diagram: dict, output_name: str = "diagram"):
 
         dot.edge(edge["source"], edge["target"], **edge_kwargs)
 
-    dot.render(output_name, format="png", cleanup=True)
-    dot.render(output_name, format="svg", cleanup=True)
-    dot.render(output_name, format="pdf", cleanup=True)
+    out_dir = Path(output_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    dot.filename = f"{output_name}.gv"
+    dot.directory = str(out_dir)
 
-    print(f"Схема сохранена: {output_name}.png")
-    print(f"Схема сохранена: {output_name}.svg")
-    print(f"Схема сохранена: {output_name}.pdf")
+    png_path = dot.render(format="png", cleanup=True)
+    svg_path = dot.render(format="svg", cleanup=True)
+    pdf_path = dot.render(format="pdf", cleanup=True)
+
+    print(f"Схема сохранена: {Path(png_path).name}")
+    print(f"Схема сохранена: {Path(svg_path).name}")
+    print(f"Схема сохранена: {Path(pdf_path).name}")
+    return png_path
 
 
 def load_references_for_mode(mode: str, base_folder: str = "references") -> list[dict]:
@@ -1163,22 +1187,31 @@ def format_references_for_prompt(references: list[dict]) -> str:
     return "\n\n".join(parts)
 
 
-def render_diagram(diagram: dict, output_name: str = "diagram"):
+def render_diagram(
+    diagram: dict,
+    output_name: str = "diagram",
+    output_dir: str | Path = "outputs",
+):
     renderer = diagram.get("renderer", "")
     layout_hint = diagram.get("layout_hint", "")
 
+    output_root = Path(output_dir)
+    if output_root.name == str(output_name):
+        output_root = output_root.parent
+
     if renderer == "plotneuralnet" or layout_hint == "model_architecture":
-        plot_renderer = build_model_renderer(diagram, project_root=".")
+        # PlotNeuralNet already writes to output_root/output_name/.
+        plot_renderer = build_model_renderer(diagram, project_root=".", output_root=output_root)
         return plot_renderer.render(diagram, output_name=output_name)
 
     if renderer == "infographic" or layout_hint == "infographic":
-        info_renderer = InfographicRenderer()
+        info_renderer = InfographicRenderer(output_root=output_root)
         return info_renderer.render(diagram, output_name=output_name)
 
     if renderer == "pipeline" or layout_hint == "pipeline":
-        return render_pipeline_diagram(diagram, output_name)
+        return render_pipeline_diagram(diagram, output_name, output_dir=output_dir)
 
-    return render_general_diagram(diagram, output_name)
+    return render_general_diagram(diagram, output_name, output_dir=output_dir)
 
 
 def critique_diagram(user_task: str, draft_json: dict, references: list[dict] | None = None) -> dict:
@@ -1666,7 +1699,23 @@ def generate_diagram(user_task: str, reference_description: dict | str | None = 
         "edges": [],
     }
 
-def main():
+def parse_cli_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="AI Diagram Agent")
+    parser.add_argument(
+        "--explain-critic-influence",
+        choices=["on", "off"],
+        default="on",
+        help="Enable critic influence analytics and SHAP artifacts (default: on).",
+    )
+    parser.add_argument(
+        "--no-auto-servers",
+        action="store_true",
+        help="Do not auto-start local model servers via ServerManager.",
+    )
+    return parser.parse_args()
+
+
+def main(explain_critic_influence: bool = True):
     default_prompt = """
     2д схема автосервиса
     """
@@ -1680,9 +1729,13 @@ def main():
     draft = generate_diagram(user_task, references)
     print(json.dumps(draft, ensure_ascii=False, indent=2))
 
+    output_filename = f"diagram_{int(time.time())}"
+    run_dir = Path("outputs") / output_filename
+    run_dir.mkdir(parents=True, exist_ok=True)
+
     print("\n=== ШАГ 2: Критика ===")
     critique = critique_diagram(user_task, draft, references)
-    save_json_artifact("critique.json", critique)
+    save_json_artifact("critique.json", critique, base_dir=run_dir)
     print(json.dumps(critique, ensure_ascii=False, indent=2))
 
     print("\n=== ШАГ 3: Исправление ===")
@@ -1690,15 +1743,56 @@ def main():
     print(json.dumps(final, ensure_ascii=False, indent=2))
 
     final_clean = clean_diagram_labels(final)
-    
-    output_filename = f"diagram_{int(time.time())}"
-    render_diagram(final_clean, output_filename)
+    save_json_artifact("draft.json", draft, base_dir=run_dir)
+    save_json_artifact("final.json", final_clean, base_dir=run_dir)
 
-    pass
+    if explain_critic_influence:
+        print("\n=== ШАГ 4: Анализ влияния критика ===")
+        try:
+            analyzer = CriticInfluenceAnalyzer(output_root="outputs")
+            influence_result = analyzer.analyze_and_save(
+                run_id=output_filename,
+                run_dir=run_dir,
+                draft=draft,
+                critique=critique,
+                final=final_clean,
+            )
+            print(
+                f"[critic-influence] status={influence_result.status}, "
+                f"report={run_dir / 'critic_influence_report.json'}"
+            )
+        except Exception as exc:
+            fallback_report = {
+                "status": "error_fallback",
+                "reason": str(exc),
+                "run_id": output_filename,
+            }
+            save_json_artifact(
+                "critic_influence_report.json",
+                fallback_report,
+                base_dir=run_dir,
+            )
+            (run_dir / "critic_influence_summary.md").write_text(
+                "# Critic Influence Summary\n\n"
+                "status: `error_fallback`\n\n"
+                f"reason: `{exc}`\n",
+                encoding="utf-8",
+            )
+            print(f"[critic-influence] fallback due to error: {exc}")
+    else:
+        print("\n=== ШАГ 4: Анализ влияния критика (OFF) ===")
+
+    print("\n=== ШАГ 5: Рендер ===")
+    render_diagram(final_clean, output_filename, output_dir=run_dir)
 
 
 if __name__ == "__main__":
-    with ServerManager() as manager:
-        manager.start_default_servers()
-        main()
-        manager.stop_all()
+    args = parse_cli_args()
+    explain = args.explain_critic_influence == "on"
+    if args.no_auto_servers:
+        main(explain_critic_influence=explain)
+    else:
+        with ServerManager() as manager:
+            manager.start_default_servers()
+            main(explain_critic_influence=explain)
+            manager.stop_all()

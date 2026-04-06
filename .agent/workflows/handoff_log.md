@@ -385,3 +385,42 @@ description: Agent-to-agent execution handoff log
 - `python3 -m py_compile plotneuralnet_renderer.py`
 - Render check:
   - `outputs/softxai_system_row_fix/softxai_system_row_fix.png`
+
+## 2026-04-06 - Critic Influence SHAP module integration
+
+### Context
+- Started implementation for: `prompt -> generator -> critic -> improver -> render`
+- Goal: quantify and explain how critique influences draft->final changes.
+
+### Changes
+- Added `critic_influence.py`:
+  - critique feature extraction (`score`, `task_fit`, category counts/text lengths),
+  - draft/final delta metrics (`delta_nodes`, `delta_edges`, `changed_labels`, `changed_kinds`, `change_score`),
+  - history accumulation: `outputs/_critic_influence_history.jsonl`,
+  - surrogate fit (`RandomForestRegressor`) + SHAP path when available,
+  - robust fallbacks: `insufficient_data`, `degraded_no_sklearn`, `degraded_no_shap`,
+  - per-run artifacts:
+    - `critic_influence_report.json`
+    - `critic_influence_summary.md`
+    - optional `critic_shap_beeswarm.png`, `critic_shap_bar.png`.
+
+- Updated `main.py`:
+  - CLI switches:
+    - `--explain-critic-influence on|off` (default `on`)
+    - `--no-auto-servers`
+  - integrated critic influence step after `improve` and before render,
+  - per-run folder now used for JSON artifacts (`draft/critique/final`),
+  - added `save_json_artifact()` helper.
+
+- Added tests:
+  - `tests/test_critic_influence.py` (3 unit tests).
+
+- Updated docs:
+  - `PROJECT_CONTEXT.md` section "Critic Influence Analytics (SHAP)".
+
+### Verification
+- `python3 -m py_compile main.py critic_influence.py plotneuralnet_renderer.py`
+- `python3 tests/test_critic_influence.py` -> `OK (3 tests)`
+
+### Remaining
+- Optional global aggregate report file can be added in a follow-up (currently aggregate stats are still available inside per-run report + history).
