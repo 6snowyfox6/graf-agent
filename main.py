@@ -9,11 +9,12 @@ from pathlib import Path
 import requests
 from typing import Any
 
-from plotneuralnet_renderer import PlotNeuralNetRenderer, build_model_renderer
-from infographic_renderer import InfographicRenderer
 from graphviz import Digraph
 from server_manager import ServerManager
 from critic_influence import CriticInfluenceAnalyzer
+from pipeline.render_router import render_diagram as route_render_diagram
+from pipeline.json_ops import extract_json as pipeline_extract_json
+from pipeline.diagram_cleaning import clean_diagram_labels as pipeline_clean_diagram_labels
 
 # Локальные endpoints llama-cpp-python
 # Qwen (генератор) на порту 8000, Gemma (критик/vision) на порту 8001
@@ -41,13 +42,19 @@ def save_json_artifact(filename: str, data: Any, base_dir: str | Path = ".") -> 
     target.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
     return target
 
-def load_user_prompt(default_prompt: str) -> str:
+
+def load_user_prompt(default_prompt: str, prefer_test_prompt: bool = True) -> str:
+    if not prefer_test_prompt:
+        return default_prompt
     test_prompt_path = Path("_test_prompt.txt")
     if test_prompt_path.exists():
         text = test_prompt_path.read_text(encoding="utf-8").strip()
         if text:
             return text
     return default_prompt
+
+
+
 
 FORBIDDEN_VISIBLE_TOKENS = {
     "input", "output", "block", "conv", "ui", "api", "db", "service"
@@ -247,7 +254,8 @@ def ask_llm(
     system_prompt: str,
     user_prompt: str,
     timeout: tuple[int, int] = (30, 300),
-    temperature: float = 0.15
+    temperature: float = 0.15,
+    response_format: dict[str, Any] | None = None,
 ) -> str:
     endpoint = _get_endpoint(model)
     payload = {
@@ -258,6 +266,8 @@ def ask_llm(
         ],
         "temperature": temperature,
     }
+    if response_format is not None:
+        payload["response_format"] = response_format
 
     response = requests.post(endpoint, json=payload, timeout=timeout)
     if response.status_code >= 400:
@@ -268,125 +278,8 @@ def ask_llm(
 
 
 def extract_json(text: str) -> dict:
-    text = text.strip()
+    return pipeline_extract_json(text)
 
-    # убрать markdown fences
-    text = re.sub(r"^\s*```json\s*", "", text, flags=re.IGNORECASE)
-    text = re.sub(r"^\s*```\s*", "", text)
-    text = re.sub(r"\s*```\s*$", "", text)
-
-    decoder = json.JSONDecoder()
-
-    # пробуем найти первый полноценный JSON-объект в тексте
-    for start_idx, ch in enumerate(text):
-        if ch != "{":
-            continue
-
-        try:
-            obj, _ = decoder.raw_decode(text[start_idx:])
-            if isinstance(obj, dict):
-                return obj
-        except json.JSONDecodeError:
-            continue
-
-    print("=== BAD JSON TEXT ===")
-    print(text)
-    print("=== END BAD JSON TEXT ===")
-    raise ValueError("Не удалось извлечь JSON-объект из ответа модели")
-
-def extract_all_json_objects(text: str) -> list[dict]:
-    text = text.strip()
-    decoder = json.JSONDecoder()
-    objects: list[dict] = []
-
-    i = 0
-    while i < len(text):
-        if text[i] != "{":
-            i += 1
-            continue
-
-        try:
-            obj, consumed = decoder.raw_decode(text[i:])
-            if isinstance(obj, dict):
-                objects.append(obj)
-            i += consumed
-        except json.JSONDecodeError:
-            i += 1
-
-    return objects
-
-
-def coerce_improver_output_to_diagram(raw_answer: str, fallback: dict) -> dict:
-    try:
-        obj = extract_json(raw_answer)
-        if isinstance(obj, dict) and isinstance(obj.get("nodes"), list):
-            obj["renderer"] = fallback.get("renderer", "general")
-            obj["layout_hint"] = fallback.get("layout_hint", "general")
-            return obj
-    except Exception:
-        pass
-
-    objects = extract_all_json_objects(raw_answer)
-    if not objects:
-        raise ValueError("Не удалось извлечь ни одного JSON-объекта из ответа improver")
-
-    title = fallback.get("title", "Диаграмма")
-    renderer = fallback.get("renderer", "general")
-    layout_hint = fallback.get("layout_hint", "general")
-    style = fallback.get("style", {"direction": "TB"})
-    nodes = []
-    edges = []
-    seen_ids = set()
-    seen_edges = set()
-
-    for obj in objects:
-        if not isinstance(obj, dict):
-            continue
-
-        if "title" in obj and obj["title"]:
-            title = obj["title"]
-
-        # renderer/layout_hint больше НЕ перезаписываем из ответа модели
-
-        if isinstance(obj.get("style"), dict):
-            style = obj["style"]
-
-        if isinstance(obj.get("nodes"), list):
-            for node in obj["nodes"]:
-                if not isinstance(node, dict):
-                    continue
-                node_id = str(node.get("id", "")).strip()
-                if not node_id or node_id in seen_ids:
-                    continue
-                seen_ids.add(node_id)
-                nodes.append(node)
-
-        if isinstance(obj.get("edges"), list):
-            for edge in obj["edges"]:
-                if not isinstance(edge, dict):
-                    continue
-                src = str(edge.get("source", "")).strip()
-                dst = str(edge.get("target", "")).strip()
-                key = (src, dst)
-                if not src or not dst or src == dst or key in seen_edges:
-                    continue
-                seen_edges.add(key)
-                edges.append(edge)
-
-    if not edges and isinstance(fallback.get("edges"), list):
-        edges = fallback["edges"]
-
-    if not nodes:
-        raise ValueError("Improver не вернул пригодные nodes")
-
-    return {
-        "title": title,
-        "renderer": renderer,
-        "layout_hint": layout_hint,
-        "style": style,
-        "nodes": nodes,
-        "edges": edges,
-    }
 
 def restore_node_kinds(original: dict, improved: dict) -> dict:
     original_kinds = {
@@ -406,18 +299,8 @@ def restore_node_kinds(original: dict, improved: dict) -> dict:
 
 def detect_diagram_mode(user_task: str, configs: list[dict]) -> str:
     text = user_task.lower()
-
-    general_markers = [
-        "general architecture",
-        "general diagram",
-        "режим general",
-        "общая архитектурная диаграмма",
-        "общая архитектура системы",
-    ]
-    if any(marker in text for marker in general_markers):
-        return "general"
-
     matches = []
+
     for config in configs:
         keywords = config.get("keywords", [])
         for word in keywords:
@@ -429,7 +312,21 @@ def detect_diagram_mode(user_task: str, configs: list[dict]) -> str:
         matches.sort(key=lambda x: x[0])
         return matches[0][1]
 
+    # Heuristic fallback: if request clearly asks for NN/ML architecture diagram,
+    # force model_architecture mode even when keywords in config were not hit.
+    architecture_markers = [
+        "архитектур", "architecture", "нейросет", "neural", "модель",
+        "model", "3д", "3d", "plotneuralnet", "resnet", "реснет",
+        "unet", "юнет", "transformer", "трансформер", "gan", "yolo",
+        "encoder", "decoder", "квен", "qwen", "anfis", "анфис",
+    ]
+    if any(marker in text for marker in architecture_markers):
+        known_modes = {str(c.get("name", "")).strip() for c in configs}
+        if "model_architecture" in known_modes:
+            return "model_architecture"
+
     return "general"
+
 
 def get_diagram_config(mode: str, configs: list[dict]) -> dict:
     for config in configs:
@@ -1163,75 +1060,67 @@ def render_diagram(
     output_name: str = "diagram",
     output_dir: str | Path = "outputs",
 ):
-    renderer = diagram.get("renderer", "")
-    layout_hint = diagram.get("layout_hint", "")
-
-    output_root = Path(output_dir)
-    if output_root.name == str(output_name):
-        output_root = output_root.parent
-
-    if renderer == "plotneuralnet" or layout_hint == "model_architecture":
-        # PlotNeuralNet already writes to output_root/output_name/.
-        plot_renderer = build_model_renderer(diagram, project_root=".", output_root=output_root)
-        return plot_renderer.render(diagram, output_name=output_name)
-
-    if renderer == "infographic" or layout_hint == "infographic":
-        info_renderer = InfographicRenderer(output_root=output_root)
-        return info_renderer.render(diagram, output_name=output_name)
-
-    if renderer == "pipeline" or layout_hint == "pipeline":
-        return render_pipeline_diagram(diagram, output_name, output_dir=output_dir)
-
-    return render_general_diagram(diagram, output_name, output_dir=output_dir)
+    return route_render_diagram(
+        diagram=diagram,
+        output_name=output_name,
+        output_dir=output_dir,
+        render_general=render_general_diagram,
+        render_pipeline=render_pipeline_diagram,
+    )
 
 
 def critique_diagram(user_task: str, draft_json: dict, references: list[dict] | None = None) -> dict:
     references = normalize_references(references or [])
     refs_text = format_references_for_prompt(references)
 
+    # Keep critic input compact to fit smaller context windows (e.g. 2048).
+    def _compact_diagram_for_critique(diagram: dict) -> dict:
+        nodes = []
+        for node in diagram.get("nodes", [])[:24]:
+            if not isinstance(node, dict):
+                continue
+            nodes.append({
+                "id": str(node.get("id", ""))[:48],
+                "label": str(node.get("label", ""))[:72],
+                "kind": str(node.get("kind", ""))[:24],
+            })
+
+        edges = []
+        for edge in diagram.get("edges", [])[:36]:
+            if not isinstance(edge, dict):
+                continue
+            edges.append({
+                "source": str(edge.get("source", ""))[:48],
+                "target": str(edge.get("target", ""))[:48],
+                "label": str(edge.get("label", ""))[:48],
+            })
+
+        return {
+            "title": str(diagram.get("title", ""))[:120],
+            "renderer": str(diagram.get("renderer", ""))[:32],
+            "layout_hint": str(diagram.get("layout_hint", ""))[:32],
+            "nodes": nodes,
+            "edges": edges,
+        }
+
+    compact_draft = _compact_diagram_for_critique(draft_json)
+    compact_refs = refs_text[:1200] if refs_text else ""
+
     system_prompt = (
-        "Ты критик диаграмм. "
-        "Оцени соответствие пользовательскому запросу и качество структуры. "
-        "Но не критикуй и не предлагай удалять служебные поля внутреннего формата, "
-        "если они нужны пайплайну рендера. "
-        "К таким полям относятся title, renderer, layout_hint, style, nodes[].kind и другие системные поля. "
-        "Ты можешь критиковать только смысл схемы, состав элементов, связи, читаемость и визуальную организацию. "
-        "Нельзя предлагать менять JSON-контракт проекта. "
-        "Верни строго один валидный JSON-объект, без markdown-блоков и без дополнительного текста."
+        "Ты критик диаграмм. Верни только валидный JSON по заданной схеме. "
+        "Оцени соответствие задаче, смысл, связи и читаемость. "
+        "Не меняй JSON-контракт."
     )
 
     user_prompt = f"""
 Референсы:
-{refs_text}
+{compact_refs}
 
 Запрос пользователя:
-{user_task}
+{user_task[:1200]}
 
 Черновая схема:
-{json.dumps(draft_json, ensure_ascii=False, indent=2)}
-
-Сделай проверку в таком порядке:
-
-1. Выдели из запроса пользователя ключевые требования:
-   - тип диаграммы
-   - обязательные сущности / блоки
-   - обязательные связи / поток
-   - ограничения по стилю / компактности / читаемости
-   - важные подписи / входы / выходы
-
-2. Сравни требования с черновой схемой.
-
-3. Найди:
-   - что отсутствует
-   - что добавлено лишнее
-   - что интерпретировано неверно
-   - что мешает читаемости
-
-КРИТИЧЕСКОЕ ТРЕБОВАНИЕ:
-- верни только один JSON-объект;
-- не используй ```json;
-- не обрывай ответ;
-- если замечаний мало, всё равно верни полный JSON по схеме ниже.
+{json.dumps(compact_draft, ensure_ascii=False, separators=(",", ":"))}
 
 Верни JSON строго такого вида:
 {{
@@ -1246,12 +1135,47 @@ def critique_diagram(user_task: str, draft_json: dict, references: list[dict] | 
   "fixes": ["string"]
 }}
 """
-    raw_answer = ask_llm(CRITIC_MODEL, system_prompt, user_prompt)
-
+    raw_answer = ask_llm(
+        CRITIC_MODEL,
+        system_prompt,
+        user_prompt,
+        temperature=0.05,
+        response_format={"type": "json_object"},
+    )
     try:
         return extract_json(raw_answer)
     except Exception as e:
         print(f"[WARN] critique parse failed: {e}")
+        logs_dir = Path("logs")
+        logs_dir.mkdir(parents=True, exist_ok=True)
+        ts = int(time.time())
+        (logs_dir / f"critique_raw_{ts}.txt").write_text(raw_answer, encoding="utf-8")
+        # One strict retry before fallback.
+        retry_system_prompt = (
+            system_prompt
+            + " Верни только один валидный JSON-объект без markdown, "
+            + "без пояснений, без текста до и после JSON."
+        )
+        retry_user_prompt = (
+            user_prompt
+            + "\n\nПовтори ответ СТРОГО как валидный JSON-объект, ничего кроме JSON."
+        )
+        try:
+            retry_answer = ask_llm(
+                CRITIC_MODEL,
+                retry_system_prompt,
+                retry_user_prompt,
+                temperature=0.0,
+                response_format={"type": "json_object"},
+            )
+            return extract_json(retry_answer)
+        except Exception as retry_err:
+            print(f"[WARN] critique retry parse failed: {retry_err}")
+            ts2 = int(time.time())
+            (logs_dir / f"critique_retry_raw_{ts2}.txt").write_text(
+                retry_answer if "retry_answer" in locals() else "",
+                encoding="utf-8",
+            )
         return {
             "score": 0.0,
             "task_fit_score": 0.0,
@@ -1260,42 +1184,16 @@ def critique_diagram(user_task: str, draft_json: dict, references: list[dict] | 
             "wrong_interpretations": [],
             "extra_elements": [],
             "visual_problems": ["Критик вернул битый или обрезанный JSON"],
-            "problems": [f"critique parse failed: {e}"],
+            "problems": [
+                f"critique parse failed: {e}",
+                "critique retry also failed to produce valid JSON",
+            ],
             "fixes": ["Повторить критику или использовать черновую схему без изменений"],
         }
 
 
-def _balance_parentheses(text: str) -> str:
-    opened = text.count('(')
-    closed = text.count(')')
-    if opened > closed:
-        return text + ')' * (opened - closed)
-    return text
-
-def _recursive_clean_strings(data: Any) -> Any:
-    if isinstance(data, dict):
-        return {k: _recursive_clean_strings(v) for k, v in data.items()}
-    elif isinstance(data, list):
-        return [_recursive_clean_strings(v) for v in data]
-    elif isinstance(data, str):
-        return _balance_parentheses(data)
-    return data
-
 def clean_diagram_labels(diagram: dict) -> dict:
-    cleaned = _recursive_clean_strings(diagram)
-
-    bad_labels = {"→", "->", "-->", "=>", ""}
-    if "edges" in cleaned:
-        new_edges = []
-        for edge in cleaned.get("edges", []):
-            new_edge = edge.copy()
-            label = str(new_edge.get("label", "")).strip()
-            if label in bad_labels:
-                new_edge["label"] = ""
-            new_edges.append(new_edge)
-        cleaned["edges"] = new_edges
-
-    return cleaned
+    return pipeline_clean_diagram_labels(diagram)
 
 
 def improve_diagram(
@@ -1347,12 +1245,6 @@ def improve_diagram(
         block = services
         output = databases
 
-        КРИТИЧЕСКОЕ ТРЕБОВАНИЕ:
-        - верни один единый JSON-объект диаграммы;
-        - нельзя возвращать много отдельных JSON-объектов;
-        - верхний уровень JSON должен содержать nodes и edges;
-        - недопустим формат "один JSON = один узел".
-
         Верни только исправленный JSON.
     """
     raw_answer = ask_llm(GENERATOR_MODEL, system_prompt, user_prompt)
@@ -1362,32 +1254,29 @@ def improve_diagram(
     print("=== END RAW ANSWER FROM IMPROVER ===\n")
 
     try:
-        improved = coerce_improver_output_to_diagram(raw_answer, fallback=draft_json)
+        improved = extract_json(raw_answer)
         improved = clean_diagram_labels(improved)
         improved = restore_node_kinds(draft_json, improved)
-
         draft_renderer = str(draft_json.get("renderer", "")).lower()
         draft_layout = str(draft_json.get("layout_hint", "")).lower()
-        is_general = draft_renderer == "general" or draft_layout == "general"
+        improved.setdefault("renderer", draft_json.get("renderer", "general"))
+        improved.setdefault("layout_hint", draft_json.get("layout_hint", "general"))
 
+        is_general = draft_renderer == "general" or draft_layout == "general"
         if is_general:
             improved = normalize_general_diagram(improved, fallback=draft_json)
         else:
-            # Для PlotNeuralNet и других non-general режимов
-            # сохраняем renderer/layout_hint из исходного draft
-            improved.setdefault("renderer", draft_json.get("renderer", "plotneuralnet"))
-            improved.setdefault("layout_hint", draft_json.get("layout_hint", "model_architecture"))
-            improved.setdefault("style", draft_json.get("style", {"direction": "TB"}))
-
-            # Если improver не вернул edges, они уже подтянуты из fallback
-            # но на всякий случай добиваем здесь
-            if not isinstance(improved.get("edges"), list):
-                improved["edges"] = draft_json.get("edges", [])
-
+            improved["renderer"] = draft_json.get(
+                "renderer", improved.get("renderer", "plotneuralnet")
+            )
+            improved["layout_hint"] = draft_json.get(
+                "layout_hint", improved.get("layout_hint", "model_architecture")
+            )
         return improved
-    except Exception as e:
-        print(f"Ошибка парсинга improve-ответа. Возвращаю draft_json. Причина: {e}")
+    except Exception:
+        print("Ошибка парсинга improve-ответа. Возвращаю draft_json.")
         return draft_json
+
 
 def image_to_data_url(image_path: str) -> str:
     mime_type, _ = mimetypes.guess_type(image_path)
@@ -1535,14 +1424,45 @@ def analyze_reference_image(image_path: str) -> dict:
     return extract_json(raw_answer)
 
 
+def _is_hybrid_request(user_task: str) -> bool:
+    text = str(user_task).lower()
+    has_resnet = "resnet" in text or "реснет" in text
+    has_qwen = "qwen" in text or "квен" in text
+    has_anfis = "anfis" in text or "анфис" in text
+    return has_resnet and has_qwen and has_anfis
+
+
+def _hybrid_coverage(candidate: dict[str, Any]) -> tuple[float, list[str]]:
+    title = str(candidate.get("title", "")).lower()
+    corpus = [title]
+    for node in candidate.get("nodes", []):
+        if isinstance(node, dict):
+            corpus.append(str(node.get("id", "")).lower())
+            corpus.append(str(node.get("label", "")).lower())
+            corpus.append(str(node.get("kind", "")).lower())
+    text = " ".join(corpus)
+
+    required = {
+        "resnet": ("resnet" in text or "реснет" in text),
+        "qwen": ("qwen" in text or "квен" in text),
+        "anfis": ("anfis" in text or "анфис" in text),
+        "fusion": ("fusion" in text or "concat" in text or "слияни" in text),
+    }
+    missing = [name for name, ok in required.items() if not ok]
+    score = float(sum(1 for ok in required.values() if ok))
+    # prefer richer yet readable drafts
+    score += min(2.0, len(candidate.get("nodes", [])) * 0.08)
+    score += min(1.0, len(candidate.get("edges", [])) * 0.05)
+    return score, missing
+
+
 def generate_diagram(user_task: str, reference_description: dict | str | None = None) -> dict:
     configs = DIAGRAM_CONFIGS or load_diagram_types()
     mode = detect_diagram_mode(user_task, configs)
     config = get_diagram_config(mode, configs)
 
     system_prompt = config["system_prompt"]
-    layout_hint = str(config.get("layout_hint", "general")).lower()
-    renderer_name = str(config.get("renderer", "general")).lower()
+    layout_hint = config.get("layout_hint", "general")
     extra_rules = "\n".join(
         f"- {rule}" for rule in config.get("extra_rules", [])
     )
@@ -1576,29 +1496,6 @@ def generate_diagram(user_task: str, reference_description: dict | str | None = 
             '}'
         )
 
-    if renderer_name == "plotneuralnet" or layout_hint == "model_architecture":
-        mode_rules = """
-Важно:
-- это не general diagram и не Graphviz-style flowchart;
-- сохраняй renderer = plotneuralnet и layout_hint = model_architecture;
-- можно использовать короткие английские подписи слоев;
-- схема должна описывать именно архитектуру модели;
-- не подменяй архитектуру шаблоном web/api/service/db;
-- не превращай результат в обычную бизнес-схему;
-- верни только валидный JSON без markdown и пояснений.
-"""
-    else:
-        mode_rules = """
-Важно:
-- все видимые подписи и title должны быть только на русском языке;
-- не используй в label слова input, output, block, conv, ui, api, db, service;
-- kind может оставаться служебным внутренним полем;
-- не делай лишних связей;
-- не делай один центральный хаб без необходимости;
-- для general-схемы предпочитай уровни: верхний слой -> интерфейсы -> сервисы -> хранилища;
-- верни только валидный JSON без markdown и пояснений.
-"""
-
     user_prompt = f"""
 Референсы:
 {reference_text}
@@ -1609,7 +1506,15 @@ def generate_diagram(user_task: str, reference_description: dict | str | None = 
 Дополнительные требования:
 {extra_rules}
 
-{mode_rules}
+Важно:
+- все видимые подписи и title должны быть только на русском языке;
+- не используй в label слова input, output, block, conv, ui, api, db, service;
+- kind может оставаться служебным внутренним полем;
+- не делай лишних связей;
+- не делай один центральный хаб без необходимости;
+- для general-схемы предпочитай уровни: верхний слой -> интерфейсы -> сервисы -> хранилища.
+
+Верни только валидный JSON без markdown и пояснений.
 
 Формат:
 {json_format_block}
@@ -1617,14 +1522,17 @@ def generate_diagram(user_task: str, reference_description: dict | str | None = 
 
     best_candidate = None
     best_score = -10**9
+    hybrid_request = _is_hybrid_request(user_task)
+    if hybrid_request:
+        user_prompt += (
+            "\n\nДополнительное жесткое правило для этой задачи:\n"
+            "- В диаграмме ОБЯЗАТЕЛЬНО должны быть явные части: ResNet, Qwen, ANFIS и Fusion/Concat.\n"
+            "- Если нет хотя бы одной части, ответ считается невалидным.\n"
+        )
 
     for attempt in range(3):
-        raw_answer = ask_llm(
-            GENERATOR_MODEL,
-            system_prompt,
-            user_prompt,
-            temperature=0.12
-        )
+        raw_answer = ask_llm(GENERATOR_MODEL, system_prompt,
+                             user_prompt, temperature=0.12)
 
         print(f"\n=== RAW ANSWER FROM GENERATOR #{attempt + 1} ===")
         print(raw_answer)
@@ -1632,21 +1540,22 @@ def generate_diagram(user_task: str, reference_description: dict | str | None = 
 
         try:
             candidate = extract_json(raw_answer)
-            candidate = clean_diagram_labels(candidate)
+            candidate.setdefault("renderer", config.get("renderer", "general"))
+            candidate.setdefault("layout_hint", layout_hint)
 
-            if "renderer" not in candidate or not str(candidate.get("renderer", "")).strip():
-                candidate["renderer"] = config.get("renderer", "general")
-            if "layout_hint" not in candidate or not str(candidate.get("layout_hint", "")).strip():
-                candidate["layout_hint"] = config.get("layout_hint", "general")
-
-            candidate_renderer = str(candidate.get("renderer", "")).lower()
-            candidate_layout = str(candidate.get("layout_hint", "")).lower()
-            candidate_is_general = candidate_renderer == "general" or candidate_layout == "general"
-
-            if candidate_is_general:
+            if layout_hint == "general":
                 candidate = normalize_general_diagram(candidate)
 
-            score = score_general_candidate(candidate) if candidate_is_general else 0
+            candidate = clean_diagram_labels(candidate)
+            if layout_hint == "general":
+                score = score_general_candidate(candidate)
+            elif hybrid_request:
+                score, missing = _hybrid_coverage(candidate)
+                if missing:
+                    score -= 5.0 + len(missing)
+                    print(f"[GEN HYBRID CHECK #{attempt + 1}] missing={missing}")
+            else:
+                score = float(len(candidate.get("nodes", [])) * 0.1 + len(candidate.get("edges", [])) * 0.05)
             print(f"[GEN SCORE #{attempt + 1}] {score}")
 
             if score > best_score:
@@ -1654,58 +1563,107 @@ def generate_diagram(user_task: str, reference_description: dict | str | None = 
                 best_candidate = candidate
 
         except Exception:
-            print(f"Ошибка парсинга JSON в generate_diagram(), попытка {attempt + 1}")
+            print(
+                f"Ошибка парсинга JSON в generate_diagram(), попытка {attempt + 1}")
 
     if best_candidate is not None:
+        if hybrid_request:
+            _, missing = _hybrid_coverage(best_candidate)
+            if missing:
+                print(f"[WARN] Hybrid draft incomplete, missing parts: {missing}")
         return best_candidate
 
     return {
         "type": "flowchart",
         "title": "Ошибка генерации",
-        "layout_hint": config.get("layout_hint", layout_hint),
-        "renderer": config.get("renderer", renderer_name),
+        "layout_hint": layout_hint,
         "style": {"direction": "TB", "theme": "clean"},
         "lanes": [],
         "nodes": [{"id": "error", "label": "Ошибка генерации JSON", "kind": "block"}],
         "edges": [],
     }
 
-def parse_cli_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="AI Diagram Agent")
-    parser.add_argument(
-        "--explain-critic-influence",
-        choices=["on", "off"],
-        default="on",
-        help="Enable critic influence analytics and SHAP artifacts (default: on).",
-    )
-    parser.add_argument(
-        "--no-auto-servers",
-        action="store_true",
-        help="Do not auto-start local model servers via ServerManager.",
-    )
-    return parser.parse_args()
 
+def main(
+    explain_critic_influence: bool = True,
+    use_test_prompt: bool = True,
+):
 
-def main(explain_critic_influence: bool = True):
-    default_prompt = """
-    2д схема автосервиса
-    """
-    user_task = load_user_prompt(default_prompt)
+    default_prompt = """Нарисуй 3D архитектурную диаграмму гибридной модели “ResNet18 + Qwen 3.5 + ANFIS” в стиле PlotNeuralNet.
+
+Цель:
+Показать полный инференс-пайплайн мультимодальной гибридной системы, где:
+1) ResNet-18 извлекает визуальные признаки из изображения,
+2) Qwen 3.5 извлекает семантические/текстовые признаки,
+3) ANFIS объединяет признаки и выполняет интерпретируемое нечеткое принятие решения.
+
+Требования к структуре:
+- renderer: plotneuralnet
+- layout_hint: model_architecture
+- title: "Гибридная модель ResNet18 + Qwen 3.5 + ANFIS"
+- layout: linear
+
+Обязательные блоки (слева направо):
+1. "Изображение (224x224x3)" [kind=input]
+2. "ResNet-18 Backbone" [kind=conv]
+3. "Global Avg Pool" [kind=pool]
+4. "Визуальный эмбеддинг (512)" [kind=block]
+
+Параллельная текстовая ветка:
+5. "Текстовый запрос / контекст" [kind=input]
+6. "Qwen 3.5 Encoder" [kind=block]
+7. "Текстовый эмбеддинг" [kind=block]
+
+Слияние и интерпретация:
+8. "Fusion (Concat/Projection)" [kind=concat]
+9. "ANFIS: Фаззификация" [kind=block]
+10. "ANFIS: База правил (IF-THEN)" [kind=block]
+11. "ANFIS: Дефаззификация" [kind=block]
+12. "Предсказание / класс" [kind=output]
+
+Интерпретируемые выходы (обязательно):
+13. "Важность признаков" [kind=output]
+14. "Активированные правила ANFIS" [kind=output]
+15. "Уверенность решения" [kind=output]
+
+Обязательные связи:
+- Изображение -> ResNet-18 -> GAP -> Визуальный эмбеддинг -> Fusion
+- Текстовый запрос -> Qwen 3.5 Encoder -> Текстовый эмбеддинг -> Fusion
+- Fusion -> ANFIS: Фаззификация -> ANFIS: База правил -> ANFIS: Дефаззификация -> Предсказание
+- ANFIS: База правил -> Активированные правила ANFIS
+- Fusion -> Важность признаков
+- ANFIS: Дефаззификация -> Уверенность решения
+
+Визуальные требования:
+- Цвета веток разные: визуальная ветка (сине-голубая), текстовая (фиолетовая), ANFIS (оранжево-золотая), выходы (розово-красные).
+- Подписи читаемые, без наложений.
+- Стрелки не должны проходить через текст.
+- Расстояния между блоками умеренные и одинаковые.
+- Не упрощай до абстрактных 2-3 блоков; структура должна быть детальной и правдоподобной.
+
+Формат ответа:
+Верни только валидный JSON-объект диаграммы, без markdown и без пояснений.
+
+"""
+    user_task = load_user_prompt(default_prompt, prefer_test_prompt=use_test_prompt)
+    if use_test_prompt and Path("_test_prompt.txt").exists():
+        print("[prompt-source] Используется _test_prompt.txt (если файл не пустой)")
+    else:
+        print("[prompt-source] Используется default_prompt из main.py")
 
     # Референсы теперь пустые по умолчанию. Скрипт будет подтягивать 
-    # только те файлы, что лежат в папке references/ (если они там есть).
+    # только те файлы, что лежат в папке references/ (если они там есть). 
     references = []
 
     print("=== ШАГ 1: Генерация черновика ===")
     draft = generate_diagram(user_task, references)
     print(json.dumps(draft, ensure_ascii=False, indent=2))
 
+    print("\n=== ШАГ 2: Критика ===")
+    critique = critique_diagram(user_task, draft, references)
     output_filename = f"diagram_{int(time.time())}"
     run_dir = Path("outputs") / output_filename
     run_dir.mkdir(parents=True, exist_ok=True)
-
-    print("\n=== ШАГ 2: Критика ===")
-    critique = critique_diagram(user_task, draft, references)
     save_json_artifact("critique.json", critique, base_dir=run_dir)
     print(json.dumps(critique, ensure_ascii=False, indent=2))
 
@@ -1756,14 +1714,41 @@ def main(explain_critic_influence: bool = True):
     print("\n=== ШАГ 5: Рендер ===")
     render_diagram(final_clean, output_filename, output_dir=run_dir)
 
+def parse_cli_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="AI Diagram Agent")
+    parser.add_argument(
+        "--explain-critic-influence",
+        choices=["on", "off"],
+        default="on",
+        help="Enable critic influence analytics and SHAP artifacts (default: on).",
+    )
+    parser.add_argument(
+        "--no-auto-servers",
+        action="store_true",
+        help="Do not auto-start local model servers via ServerManager.",
+    )
+    parser.add_argument(
+        "--ignore-test-prompt",
+        action="store_true",
+        help="Ignore _test_prompt.txt and use default prompt from main.py.",
+    )
+    return parser.parse_args()
+
 
 if __name__ == "__main__":
     args = parse_cli_args()
     explain = args.explain_critic_influence == "on"
+    use_test_prompt = not args.ignore_test_prompt
     if args.no_auto_servers:
-        main(explain_critic_influence=explain)
+        main(
+            explain_critic_influence=explain,
+            use_test_prompt=use_test_prompt,
+        )
     else:
         with ServerManager() as manager:
             manager.start_default_servers()
-            main(explain_critic_influence=explain)
+            main(
+                explain_critic_influence=explain,
+                use_test_prompt=use_test_prompt,
+            )
             manager.stop_all()

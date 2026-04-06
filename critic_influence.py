@@ -428,6 +428,50 @@ class CriticInfluenceAnalyzer:
 
         return produced
 
+    def _write_local_contrib_plot(
+        self,
+        run_dir: Path,
+        local_contributions: dict[str, Any],
+    ) -> str | None:
+        if not isinstance(local_contributions, dict) or not local_contributions:
+            return None
+        try:
+            import matplotlib
+            matplotlib.use("Agg")
+            import matplotlib.pyplot as plt  # type: ignore
+        except Exception:
+            return None
+
+        try:
+            rows: list[tuple[str, float]] = []
+            for k, v in local_contributions.items():
+                try:
+                    rows.append((str(k), float(v)))
+                except (TypeError, ValueError):
+                    continue
+            if not rows:
+                return None
+
+            rows = sorted(rows, key=lambda kv: abs(kv[1]), reverse=True)[:12]
+            names = [r[0] for r in rows][::-1]
+            vals = [r[1] for r in rows][::-1]
+            colors = ["#2E8B57" if v >= 0 else "#B22222" for v in vals]
+
+            plt.figure(figsize=(12, 7))
+            plt.barh(names, vals, color=colors)
+            plt.axvline(0, color="#333333", linewidth=1)
+            plt.xlabel("Local contribution to predicted change_score", fontsize=12)
+            plt.title("Critic Influence (Current Run)", fontsize=14)
+            plt.gcf().subplots_adjust(left=0.35, right=0.98, bottom=0.14, top=0.92)
+            plt.tight_layout(rect=(0.02, 0.02, 0.98, 0.98))
+
+            out = run_dir / "critic_shap_local_bar.png"
+            plt.savefig(out, dpi=170, bbox_inches="tight", pad_inches=0.25)
+            plt.close()
+            return out.name
+        except Exception:
+            return None
+
     def _make_summary_md(self, report: dict[str, Any]) -> str:
         lines: list[str] = []
         lines.append("# Critic Influence Summary")
@@ -494,6 +538,12 @@ class CriticInfluenceAnalyzer:
         history = self._load_history()
         status, explain_payload = self._fit_and_explain(history, features)
         plot_files = self._write_plots_if_possible(run_path, explain_payload)
+        local_plot = self._write_local_contrib_plot(
+            run_path,
+            explain_payload.get("local_contributions", {}),
+        )
+        if local_plot:
+            plot_files.append(local_plot)
 
         report = {
             "status": status,

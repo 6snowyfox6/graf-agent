@@ -9,7 +9,16 @@ export CUDA_HOME
 export PATH="$CUDA_HOME/bin:$PATH"
 export LD_LIBRARY_PATH="$CUDA_HOME/targets/x86_64-linux/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 
-PYTHON_BIN="${PYTHON_BIN:-$PROJECT_ROOT/.venv/bin/python3}"
+PYTHON_BIN="${PYTHON_BIN:-}"
+if [ -z "$PYTHON_BIN" ]; then
+    if [ -x "$PROJECT_ROOT/.venv/bin/python3" ]; then
+        PYTHON_BIN="$PROJECT_ROOT/.venv/bin/python3"
+    elif command -v python3 >/dev/null 2>&1; then
+        PYTHON_BIN="$(command -v python3)"
+    elif command -v python >/dev/null 2>&1; then
+        PYTHON_BIN="$(command -v python)"
+    fi
+fi
 MODEL_PATH="$PROJECT_ROOT/models/google_gemma-3-4b-it-Q4_K_M.gguf"
 
 echo "=== start_server_gemma.sh ==="
@@ -19,8 +28,8 @@ echo "PYTHON_BIN=$PYTHON_BIN"
 echo "MODEL_PATH=$MODEL_PATH"
 echo "LD_LIBRARY_PATH=$LD_LIBRARY_PATH"
 
-if [ ! -x "$PYTHON_BIN" ]; then
-    echo "Python не найден: $PYTHON_BIN"
+if [ -z "$PYTHON_BIN" ] || [ ! -x "$PYTHON_BIN" ]; then
+    echo "Python не найден. Укажи PYTHON_BIN или добавь python3 в PATH."
     exit 1
 fi
 
