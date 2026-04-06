@@ -367,3 +367,21 @@ description: Agent-to-agent execution handoff log
 
 ### Note
 - Overlap is reduced; remaining issue is readability for very long semantic labels (still dense wrapping).
+
+## 2026-04-06 - SoftXAI sub-row anchoring under system contour
+
+### Context
+- User required that `monitoring/analysis/justification/decision_making` be placed under `system_contour` (not as a left vertical chain).
+
+### Changes
+- `plotneuralnet_renderer.py`
+  - Added `_apply_system_contour_subrow()` and called it from `_compute_linear_layout()` for both chain and graphviz branches.
+  - Detects presence of `system_contour` + 4 support nodes and pins them to a centered horizontal row below `system_contour`.
+  - Added dedicated edge routing for support edges:
+    - `source in {monitoring, analysis, justification, decision_making}` and `target == system_contour`
+    - route as upward arrow `source-north -> system_contour-south`.
+
+### Validation
+- `python3 -m py_compile plotneuralnet_renderer.py`
+- Render check:
+  - `outputs/softxai_system_row_fix/softxai_system_row_fix.png`

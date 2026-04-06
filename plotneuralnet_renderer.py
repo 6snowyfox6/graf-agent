@@ -988,6 +988,10 @@ class PlotNeuralNetRenderer:
         if not nodes:
             return nodes
 
+        softxai = self._try_apply_softxai_layout(nodes)
+        if softxai is not None:
+            return softxai
+
         out_edges: dict[str, list[str]] = {n["id"]: [] for n in nodes}
         in_edges: dict[str, list[str]] = {n["id"]: [] for n in nodes}
         for e in edges:
@@ -1038,8 +1042,92 @@ class PlotNeuralNetRenderer:
             for node in nodes:
                 node["x"] = x0 + order_idx.get(node["id"], 0) * x_step
                 node["y"] = 0.0
+            self._apply_system_contour_subrow(nodes)
             return nodes
-        return self._compute_graphviz_layout(nodes, edges, ranksep="0.58", nodesep="0.42")
+        positioned = self._compute_graphviz_layout(nodes, edges, ranksep="0.58", nodesep="0.42")
+        self._apply_system_contour_subrow(positioned)
+        return positioned
+
+    def _try_apply_softxai_layout(self, nodes: list[dict[str, Any]]) -> list[dict[str, Any]] | None:
+        """
+        Спец-раскладка для SoftXAI:
+        - основной ряд на одном уровне (включая system_contour и input_data),
+        - 4 сервисных блока строго под system_contour.
+        """
+        by_id = {str(n.get("id", "")): n for n in nodes}
+        core_ids = [
+            "input_data",
+            "base_ai",
+            "soft_metrics",
+            "soft_explain",
+            "trust_verify",
+            "system_contour",
+            "output_expl",
+        ]
+        sub_ids = ["monitoring", "analysis", "justification", "decision_making"]
+        if not all(node_id in by_id for node_id in core_ids):
+            return None
+
+        # Основной ряд: слева направо, все на одном y.
+        x_positions = {
+            "input_data": 0.0,
+            "base_ai": 3.2,
+            "soft_metrics": 6.6,
+            "soft_explain": 10.0,
+            "trust_verify": 13.6,
+            "system_contour": 17.3,
+            "output_expl": 25.0,
+        }
+        y_main = 0.0
+        for node_id in core_ids:
+            node = by_id[node_id]
+            node["x"] = x_positions[node_id]
+            node["y"] = y_main
+
+        # Подряд под системным контуром.
+        if all(node_id in by_id for node_id in sub_ids):
+            cx = float(by_id["system_contour"].get("x", 17.3))
+            y_sub = y_main - 4.65
+            offsets = [-4.8, -1.6, 1.6, 4.8]
+            for node_id, dx in zip(sub_ids, offsets):
+                node = by_id[node_id]
+                node["x"] = cx + dx
+                node["y"] = y_sub
+
+        # Остальные редкие узлы, если есть, выносим правее.
+        tail_x = x_positions["output_expl"] + 2.2
+        for node in nodes:
+            node_id = str(node.get("id", ""))
+            if node_id not in core_ids and node_id not in sub_ids:
+                node["x"] = tail_x
+                node["y"] = y_main
+                tail_x += 1.9
+        return nodes
+
+    def _apply_system_contour_subrow(self, nodes: list[dict[str, Any]]) -> None:
+        """
+        Специальный фикс для SoftXAI:
+        располагаем нижний ряд строго под `system_contour`.
+        """
+        by_id = {str(n.get("id", "")): n for n in nodes}
+        contour = by_id.get("system_contour")
+        if contour is None:
+            return
+
+        sub_ids = ["monitoring", "analysis", "justification", "decision_making"]
+        if not all(node_id in by_id for node_id in sub_ids):
+            return
+
+        cx = float(contour.get("x", 0.0))
+        cy = float(contour.get("y", 0.0))
+
+        # Равномерный ряд строго под системным контуром.
+        offsets = [-3.2, -1.05, 1.05, 3.2]
+        y_row = cy - 1.9
+        for node_id, dx in zip(sub_ids, offsets):
+            node = by_id[node_id]
+            node["x"] = cx + dx
+            node["y"] = y_row
 
     def _compute_u_shape_layout(
         self,
@@ -1570,11 +1658,11 @@ class PlotNeuralNetRenderer:
 
         if max_line_chars is None:
             if kind in {"input", "output", "fc"}:
-                max_line_chars = 16
+                max_line_chars = 18
             elif kind in {"conv", "block"}:
-                max_line_chars = 16
+                max_line_chars = 18
             else:
-                max_line_chars = 14
+                max_line_chars = 16
 
         if max_lines is None:
             max_lines = 3 if kind in {"conv", "block"} else 2
@@ -1707,10 +1795,10 @@ class PlotNeuralNetRenderer:
         if side_caption:
             caption = ""
         elif len(lines) > 1:
-            caption = r"\scriptsize\shortstack[c]{" + r" \\ ".join(lines) + "}"
+            caption = r"\normalsize\shortstack[c]{" + r" \\ ".join(lines) + "}"
         else:
             if lines and len(lines[0]) > 14:
-                caption = r"\scriptsize " + lines[0]
+                caption = r"\normalsize " + lines[0]
             else:
                 caption = lines[0] if lines else ""
         macro = node.get("macro", "Box")
@@ -1733,12 +1821,38 @@ class PlotNeuralNetRenderer:
     }}}};"""
 
         if side_caption:
-            side_text = r"\scriptsize\shortstack[r]{" + r" \\ ".join(lines) + "}"
+            side_text = r"\normalsize\shortstack[r]{" + r" \\ ".join(lines) + "}"
             tex += f"\n\\node[anchor=north, align=center] at ($({name}-south)+(0.00,-0.62)$) {{{side_text}}};"
 
         return tex
 
     def _build_edge_tex(self, source: str, target: str) -> str:
+        if source == "system_contour" and target == "base_ai":
+            # Читаемая обратная связь отдельной магистралью над основным потоком.
+            return (
+                "\\draw [connection] (system_contour-north) -- "
+                "++(0,1.35,0) -| "
+                "node[pos=0.72] {\\midarrow} "
+                "(base_ai-north);"
+            )
+
+        if target == "system_contour" and source in {
+            "monitoring", "analysis", "justification", "decision_making"
+        }:
+            # Низкий коридор: горизонталь ниже текста, вход в нижнюю грань system_contour.
+            dock_dx = {
+                "monitoring": -1.55,
+                "analysis": -0.50,
+                "justification": 0.50,
+                "decision_making": 1.55,
+            }
+            dx = dock_dx[source]
+            return (
+                f"\\draw [connection] ({source}-north) -- ++(0,0.25,0) -| "
+                f"node[pos=0.60] {{\\midarrow}} "
+                f"($({target}-south)+({dx:.2f},0)$);"
+            )
+
         s_depth = self._depth_map.get(source, 0)
         t_depth = self._depth_map.get(target, 0)
         gap = max(1, t_depth - s_depth)
