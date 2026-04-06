@@ -41,4 +41,5 @@ Thumbs.db
 
 models/
 tests/runs/
+api_runs/
 
