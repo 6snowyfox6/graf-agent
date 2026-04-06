@@ -317,22 +317,15 @@ def extract_all_json_objects(text: str) -> list[dict]:
 
 
 def coerce_improver_output_to_diagram(raw_answer: str, fallback: dict) -> dict:
-    """
-    Превращает ответ improver в полноценный diagram JSON.
-
-    Поддерживает 2 случая:
-    1) improver вернул один нормальный diagram JSON с nodes/edges
-    2) improver вернул много отдельных JSON-объектов (по одному узлу)
-    """
-    # Сначала пробуем обычный путь
     try:
         obj = extract_json(raw_answer)
         if isinstance(obj, dict) and isinstance(obj.get("nodes"), list):
+            obj["renderer"] = fallback.get("renderer", "general")
+            obj["layout_hint"] = fallback.get("layout_hint", "general")
             return obj
     except Exception:
         pass
 
-    # Потом собираем все JSON-объекты из текста
     objects = extract_all_json_objects(raw_answer)
     if not objects:
         raise ValueError("Не удалось извлечь ни одного JSON-объекта из ответа improver")
@@ -341,11 +334,10 @@ def coerce_improver_output_to_diagram(raw_answer: str, fallback: dict) -> dict:
     renderer = fallback.get("renderer", "general")
     layout_hint = fallback.get("layout_hint", "general")
     style = fallback.get("style", {"direction": "TB"})
-
-    nodes: list[dict] = []
-    edges: list[dict] = []
-    seen_ids: set[str] = set()
-    seen_edges: set[tuple[str, str]] = set()
+    nodes = []
+    edges = []
+    seen_ids = set()
+    seen_edges = set()
 
     for obj in objects:
         if not isinstance(obj, dict):
@@ -353,14 +345,12 @@ def coerce_improver_output_to_diagram(raw_answer: str, fallback: dict) -> dict:
 
         if "title" in obj and obj["title"]:
             title = obj["title"]
-        if "renderer" in obj and obj["renderer"]:
-            renderer = obj["renderer"]
-        if "layout_hint" in obj and obj["layout_hint"]:
-            layout_hint = obj["layout_hint"]
+
+        # renderer/layout_hint больше НЕ перезаписываем из ответа модели
+
         if isinstance(obj.get("style"), dict):
             style = obj["style"]
 
-        # Полноценный diagram-формат
         if isinstance(obj.get("nodes"), list):
             for node in obj["nodes"]:
                 if not isinstance(node, dict):
@@ -383,39 +373,13 @@ def coerce_improver_output_to_diagram(raw_answer: str, fallback: dict) -> dict:
                 seen_edges.add(key)
                 edges.append(edge)
 
-        # Формат "один объект = один узел"
-        if "id" in obj and "label" in obj and "nodes" not in obj:
-            node_id = str(obj.get("id", "")).strip()
-            if node_id and node_id not in seen_ids:
-                seen_ids.add(node_id)
-                nodes.append({
-                    "id": node_id,
-                    "label": obj.get("label", node_id),
-                    "kind": obj.get("kind", "block"),
-                })
-
-        # Формат "один объект = одно ребро"
-        if "source" in obj and "target" in obj and "edges" not in obj:
-            src = str(obj.get("source", "")).strip()
-            dst = str(obj.get("target", "")).strip()
-            key = (src, dst)
-            if src and dst and src != dst and key not in seen_edges:
-                seen_edges.add(key)
-                edges.append({
-                    "source": src,
-                    "target": dst,
-                    "label": obj.get("label", ""),
-                })
-
-    # Если improver не вернул рёбра — используем рёбра из draft
     if not edges and isinstance(fallback.get("edges"), list):
         edges = fallback["edges"]
 
-    # Если improver вообще не собрал узлы — это уже ошибка
     if not nodes:
         raise ValueError("Improver не вернул пригодные nodes")
 
-    result = {
+    return {
         "title": title,
         "renderer": renderer,
         "layout_hint": layout_hint,
@@ -423,8 +387,6 @@ def coerce_improver_output_to_diagram(raw_answer: str, fallback: dict) -> dict:
         "nodes": nodes,
         "edges": edges,
     }
-
-    return result
 
 def restore_node_kinds(original: dict, improved: dict) -> dict:
     original_kinds = {
@@ -444,8 +406,18 @@ def restore_node_kinds(original: dict, improved: dict) -> dict:
 
 def detect_diagram_mode(user_task: str, configs: list[dict]) -> str:
     text = user_task.lower()
-    matches = []
 
+    general_markers = [
+        "general architecture",
+        "general diagram",
+        "режим general",
+        "общая архитектурная диаграмма",
+        "общая архитектура системы",
+    ]
+    if any(marker in text for marker in general_markers):
+        return "general"
+
+    matches = []
     for config in configs:
         keywords = config.get("keywords", [])
         for word in keywords:
@@ -458,7 +430,6 @@ def detect_diagram_mode(user_task: str, configs: list[dict]) -> str:
         return matches[0][1]
 
     return "general"
-
 
 def get_diagram_config(mode: str, configs: list[dict]) -> dict:
     for config in configs:

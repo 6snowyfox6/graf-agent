@@ -1,8 +1,6 @@
 {
   "name": "model_architecture",
   "keywords": [
-    "архитектура модели",
-    "model architecture",
     "нейросеть",
     "neural network",
     "cnn",
@@ -24,9 +22,7 @@
     "lstm",
     "rnn",
     "efficientnet",
-    "архитектур",
     "gan",
-    "модель",
     "генератор",
     "дискриминатор"
   ],
