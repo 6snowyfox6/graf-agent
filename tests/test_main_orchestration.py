@@ -113,7 +113,58 @@ class MainOrchestrationTests(unittest.TestCase):
             finally:
                 os.chdir(prev)
 
+    def test_main_writes_ab_replay_report(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            prev = os.getcwd()
+            os.chdir(tmp)
+            try:
+                draft = {
+                    "title": "Draft",
+                    "renderer": "general",
+                    "layout_hint": "general",
+                    "nodes": [{"id": "a", "label": "A", "kind": "input"}],
+                    "edges": [],
+                }
+                critique = {
+                    "score": 0.4,
+                    "task_fit_score": 0.4,
+                    "visual_score": 0.4,
+                    "missing_requirements": ["qwen branch"],
+                    "wrong_interpretations": [],
+                    "extra_elements": [],
+                    "visual_problems": [],
+                    "problems": ["no fusion"],
+                    "fixes": ["add qwen", "add anfis"],
+                }
+                final = {
+                    "title": "Final",
+                    "renderer": "general",
+                    "layout_hint": "general",
+                    "nodes": [{"id": "a", "label": "A2", "kind": "input"}],
+                    "edges": [],
+                }
+
+                with (
+                    patch.object(app_main, "generate_diagram", return_value=draft),
+                    patch.object(app_main, "critique_diagram", return_value=critique),
+                    patch.object(app_main, "improve_diagram", return_value=final),
+                    patch.object(app_main, "render_diagram", return_value=None),
+                    patch.object(app_main.time, "time", return_value=1776000002),
+                ):
+                    app_main.main(
+                        explain_critic_influence=False,
+                        critic_ab_replay=True,
+                    )
+
+                run_dir = Path("outputs") / "diagram_1776000002"
+                self.assertTrue((run_dir / "counterfactual_final_no_critic.json").exists())
+                self.assertTrue((run_dir / "critic_ab_replay_report.json").exists())
+                self.assertTrue((run_dir / "critic_ab_replay_summary.md").exists())
+                payload = json.loads((run_dir / "critic_ab_replay_report.json").read_text(encoding="utf-8"))
+                self.assertIn("critic_effect_delta", payload)
+            finally:
+                os.chdir(prev)
+
 
 if __name__ == "__main__":
     unittest.main()
-

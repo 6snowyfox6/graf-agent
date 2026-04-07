@@ -573,7 +573,7 @@ class PlotNeuralNetRenderer:
             f"    to_head({repr(str(plot_root))}),",
             "    to_cor(),",
             "    to_begin(),",
-            "    '\\\\def\\\\ConvColor{rgb:yellow,7;red,2.2;white,5.5}',",
+            "    '\\\\def\\\\ConvColor{rgb:yellow,5.5;orange,1.8;white,6.0}',",
             "    to_Conv(name='input', s_filer=640, n_filer=3, offset='(0,0,0)', to='(0,0,0)', width=1.2, height=56, depth=56, caption='Input 640'),",
             "    to_Conv(name='stem', s_filer=320, n_filer=32, offset='(1.2,0,0)', to='(input-east)', width=1.4, height=50, depth=50, caption='Stem'),",
             "    to_connection('input', 'stem'),",
@@ -592,14 +592,14 @@ class PlotNeuralNetRenderer:
             "    to_connection('neck_p5', 'neck_p4'),",
             f"    to_Conv(name='neck_p3', s_filer=80, n_filer=128, offset='(1.3,-3.4,0)', to='(neck_p4-east)', width=2.0, height=30, depth=30, caption='{neck_caps[0]}'),",
             "    to_connection('neck_p4', 'neck_p3'),",
-            "    '\\\\def\\\\ConvColor{rgb:yellow,5;red,6.2;white,4.5}',",
+            "    '\\\\def\\\\ConvColor{rgb:orange,4.8;yellow,2.2;white,5.5}',",
             "    to_Conv(name='head_s', s_filer=80, n_filer=255, offset='(2.2,0,0)', to='(neck_p3-east)', width=1.7, height=22, depth=22, caption='Head S'),",
             "    to_connection('neck_p3', 'head_s'),",
             "    to_Conv(name='head_m', s_filer=40, n_filer=255, offset='(2.2,0,0)', to='(neck_p4-east)', width=1.7, height=18, depth=18, caption='Head M'),",
             "    to_connection('neck_p4', 'head_m'),",
             "    to_Conv(name='head_l', s_filer=20, n_filer=255, offset='(2.2,0,0)', to='(neck_p5-east)', width=1.7, height=14, depth=14, caption='Head L'),",
             "    to_connection('neck_p5', 'head_l'),",
-            "    '\\\\def\\\\ConvColor{rgb:magenta,3.8;blue,2.2;white,5.8}',",
+            "    '\\\\def\\\\ConvColor{rgb:teal,3.8;blue,2.2;white,5.8}',",
             "    to_Conv(name='out_s', s_filer=1, n_filer=85, offset='(3.2,0,0)', to='(head_s-east)', width=1.2, height=11, depth=11, caption='Out S'),",
             "    to_connection('head_s', 'out_s'),",
             "    to_Conv(name='out_m', s_filer=1, n_filer=85, offset='(3.2,0,0)', to='(head_m-east)', width=1.2, height=10, depth=10, caption='Out M'),",
@@ -783,7 +783,7 @@ class PlotNeuralNetRenderer:
 \\begin{{document}}
 \\begin{{tikzpicture}}
 \\tikzstyle{{connection}}=[ultra thick,every node/.style={{sloped,allow upside down}},draw={{rgb:blue,4;red,1;green,1;black,3}},opacity=0.75]
-\\tikzstyle{{skip}}=[ultra thick,every node/.style={{sloped,allow upside down}},draw=black!45,densely dashed,opacity=0.58]
+\\tikzstyle{{skip}}=[ultra thick,every node/.style={{sloped,allow upside down}},draw=gray!55,densely dashed,opacity=0.58]
 
 {chr(10).join(node_blocks)}
 
@@ -914,22 +914,22 @@ class PlotNeuralNetRenderer:
         # ── Размеры блоков уменьшены для компактности ──
         if kind == "input":
             base_width = 1.8 if line_count >= 2 or longest_line > 10 else 1.5
-            block.update(macro="Box", params={"width": base_width, "height": 20, "depth": 20, "fill": "green!45", "opacity": 0.85})
+            block.update(macro="Box", params={"width": base_width, "height": 20, "depth": 20, "fill": "green!24", "opacity": 0.85})
         elif kind in ["conv", "cnn"]:
-            block.update(macro="RightBandedBox", params={"width": "{1.6}", "height": 17, "depth": 17, "fill": "yellow!65", "bandfill": "orange!70", "opacity": 0.92})
+            block.update(macro="RightBandedBox", params={"width": "{1.6}", "height": 17, "depth": 17, "fill": "blue!24", "bandfill": "teal!20", "opacity": 0.90})
         elif kind in ["pool", "maxpool", "avgpool"]:
-            block.update(macro="Box", params={"width": 1.2, "height": 14, "depth": 14, "fill": "red!45", "opacity": 0.45})
+            block.update(macro="Box", params={"width": 1.2, "height": 14, "depth": 14, "fill": "orange!18", "opacity": 0.45})
         elif kind in ["fc", "dense", "linear"]:
             base_width = 1.9 if line_count >= 2 or longest_line > 11 else 1.5
-            block.update(macro="Box", params={"width": base_width, "height": 8, "depth": 8, "fill": "violet!55", "opacity": 0.82})
+            block.update(macro="Box", params={"width": base_width, "height": 8, "depth": 8, "fill": "teal!24", "opacity": 0.82})
         elif kind in ["sum", "add", "concat", "mul", "dot"]:
             logo_map = {"sum": "$+$", "add": "$+$", "concat": "©", "mul": "$\\times$", "dot": "$\\circ$"}
-            block.update(macro="Ball", params={"radius": 1.5, "fill": "green", "logo": logo_map.get(kind, "$+$")})
+            block.update(macro="Ball", params={"radius": 1.5, "fill": "green!35", "logo": logo_map.get(kind, "$+$")})
         elif kind == "output":
             base_width = 2.0 if line_count >= 2 or longest_line > 11 else 1.5
-            block.update(macro="Box", params={"width": base_width, "height": 10, "depth": 10, "fill": "magenta!55", "opacity": 0.88})
+            block.update(macro="Box", params={"width": base_width, "height": 10, "depth": 10, "fill": "orange!24", "opacity": 0.88})
         else:
-            block.update(macro="Box", params={"width": 2.4, "height": 16, "depth": 16, "fill": "black!45", "opacity": 0.45})
+            block.update(macro="Box", params={"width": 2.4, "height": 16, "depth": 16, "fill": "gray!22", "opacity": 0.45})
 
         if "width" in block["params"]:
             block["params"]["width"] = self._compute_block_width(
@@ -2606,10 +2606,10 @@ class DualPathPlotNeuralNetRenderer(PlotNeuralNetRenderer):
             lower_label = str(label).lower()
             if "generator" in lower_label:
                 mapped["macro"] = "Box"
-                mapped["params"] = {"width": 2.5, "height": 18, "depth": 18, "fill": "blue!20"}
+                mapped["params"] = {"width": 2.5, "height": 18, "depth": 18, "fill": "blue!18"}
             elif "discriminator" in lower_label:
                 mapped["macro"] = "Box"
-                mapped["params"] = {"width": 2.7, "height": 16, "depth": 16, "fill": "red!20"}
+                mapped["params"] = {"width": 2.7, "height": 16, "depth": 16, "fill": "orange!18"}
 
         return mapped
 
@@ -2619,7 +2619,7 @@ class DualPathPlotNeuralNetRenderer(PlotNeuralNetRenderer):
             name = node["id"]
             tex += (
                 f"\n\\node[text=green!45!black] at ($({name}-north)+(0,0.62)$) {{\\scriptsize Real}};"
-                f"\n\\node[text=red!70!black] at ($({name}-south)+(0,-0.62)$) {{\\scriptsize Fake}};"
+                f"\n\\node[text=orange!70!black] at ($({name}-south)+(0,-0.62)$) {{\\scriptsize Fake}};"
             )
         role = node.get("meta_role")
         if role == "real_sample":
@@ -2630,7 +2630,7 @@ class DualPathPlotNeuralNetRenderer(PlotNeuralNetRenderer):
         elif role == "fake_sample":
             tex += (
                 f"\n\\node at ($({node['id']}-south)+(0,-0.70)$) {{\\scriptsize Sample}};"
-                f"\n\\node[text=red!70!black] at ($({node['id']}-south)+(0,-1.20)$) {{\\scriptsize generated}};"
+                f"\n\\node[text=orange!70!black] at ($({node['id']}-south)+(0,-1.20)$) {{\\scriptsize generated}};"
             )
         return tex
 

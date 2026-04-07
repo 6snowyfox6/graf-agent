@@ -125,6 +125,14 @@ COLOR_SCHEMES: dict[str, dict[str, str | list[str]]] = {
 }
 
 DEFAULT_SCHEME = "blue"
+PRESENTATION_SAFE_SCHEMES = {"blue", "green", "orange", "pastel"}
+SCHEME_FALLBACKS = {
+    "purple": "blue",
+    "dark": "blue",
+    "sunset": "orange",
+    "cyberpunk": "blue",
+    "neon": "green",
+}
 
 # ---------------------------------------------------------------------------
 # SVG-иконки (упрощённые paths)
@@ -199,7 +207,7 @@ class InfographicRenderer:
 
     Принимает diagram с полями:
       - title, subtitle (опционально)
-      - color_scheme: blue | green | orange | purple | dark
+      - color_scheme: blue | green | orange | pastel
       - sections: список секций разных типов
 
     Типы секций: stat, text_block, comparison, steps, timeline, donut_chart, gauge.
@@ -280,6 +288,9 @@ class InfographicRenderer:
 
     def build_svg(self, diagram: dict[str, Any]) -> str:
         scheme_name = str(diagram.get("color_scheme", DEFAULT_SCHEME)).lower()
+        scheme_name = SCHEME_FALLBACKS.get(scheme_name, scheme_name)
+        if scheme_name not in PRESENTATION_SAFE_SCHEMES:
+            scheme_name = DEFAULT_SCHEME
         colors = COLOR_SCHEMES.get(scheme_name, COLOR_SCHEMES[DEFAULT_SCHEME])
 
         title = diagram.get("title", "Инфографика")

@@ -11,7 +11,11 @@ from typing import Any
 
 from graphviz import Digraph
 from server_manager import ServerManager
-from critic_influence import CriticInfluenceAnalyzer
+from critic_influence import (
+    CriticInfluenceAnalyzer,
+    compute_change_metrics,
+    compute_critic_listening_metrics,
+)
 from pipeline.render_router import render_diagram as route_render_diagram
 from pipeline.json_ops import extract_json as pipeline_extract_json
 from pipeline.diagram_cleaning import clean_diagram_labels as pipeline_clean_diagram_labels
@@ -400,8 +404,8 @@ def auto_style_node(node: dict) -> dict:
         or "выход" in label or "результат" in label
     ):
         styled.setdefault("shape", "ellipse")
-        styled.setdefault("fillcolor", "#d9f2d9")
-        styled.setdefault("color", "#4f7f4f")
+        styled.setdefault("fillcolor", "#EAF6EC")
+        styled.setdefault("color", "#5C8B66")
         styled.setdefault("style", "filled,bold")
     elif (
         "backbone" in label or "encoder" in label or "decoder" in label
@@ -409,8 +413,8 @@ def auto_style_node(node: dict) -> dict:
         or "resnet" in label or "block" in label or "neck" in label or "модуль" in label
     ):
         styled.setdefault("shape", "box")
-        styled.setdefault("fillcolor", "#d9e8fb")
-        styled.setdefault("color", "#4a6fa5")
+        styled.setdefault("fillcolor", "#EAF2FB")
+        styled.setdefault("color", "#5A7BA3")
         styled.setdefault("style", "filled,rounded")
     elif (
         "feature" in label or "embedding" in label or "эмбед" in label
@@ -418,8 +422,8 @@ def auto_style_node(node: dict) -> dict:
         or "database" in label or "бд" in label or "vector" in label
     ):
         styled.setdefault("shape", "cylinder")
-        styled.setdefault("fillcolor", "#fbe5d6")
-        styled.setdefault("color", "#a65e2e")
+        styled.setdefault("fillcolor", "#FDF1E6")
+        styled.setdefault("color", "#A7774B")
         styled.setdefault("style", "filled,bold")
     elif (
         "head" in label or "classifier" in label or "detector" in label
@@ -427,20 +431,20 @@ def auto_style_node(node: dict) -> dict:
         or "классиф" in label or "детектор" in label
     ):
         styled.setdefault("shape", "box")
-        styled.setdefault("fillcolor", "#e8dcf8")
-        styled.setdefault("color", "#6b4fa3")
+        styled.setdefault("fillcolor", "#EEF3F7")
+        styled.setdefault("color", "#667B8F")
         styled.setdefault("style", "filled,rounded")
     elif (
         "ontology" in label or "онтолог" in label or "kg" in label or "graph" in label
     ):
         styled.setdefault("shape", "cylinder")
-        styled.setdefault("fillcolor", "#fbe5d6")
-        styled.setdefault("color", "#a65e2e")
+        styled.setdefault("fillcolor", "#FDF1E6")
+        styled.setdefault("color", "#A7774B")
         styled.setdefault("style", "filled,bold")
     else:
         styled.setdefault("shape", "box")
-        styled.setdefault("fillcolor", "#d9e8fb")
-        styled.setdefault("color", "#4a6fa5")
+        styled.setdefault("fillcolor", "#EAF2FB")
+        styled.setdefault("color", "#5A7BA3")
         styled.setdefault("style", "filled,rounded")
 
     return styled
@@ -571,32 +575,32 @@ def render_general_diagram(
             "input": {
                 "shape": "ellipse",
                 "style": "filled",
-                "fillcolor": "#d9ead3",
-                "color": "#4f7f4f",
+                "fillcolor": "#EAF6EC",
+                "color": "#5C8B66",
             },
             "conv": {
                 "shape": "box",
                 "style": "rounded,filled",
-                "fillcolor": "#d9e7f7",
-                "color": "#5a84c9",
+                "fillcolor": "#EAF2FB",
+                "color": "#5A7BA3",
             },
             "block": {
                 "shape": "box",
                 "style": "rounded,filled",
-                "fillcolor": "#d9e7f7",
-                "color": "#5a84c9",
+                "fillcolor": "#EEF3F7",
+                "color": "#667B8F",
             },
             "output": {
                 "shape": "ellipse",
                 "style": "filled",
-                "fillcolor": "#f4cccc",
-                "color": "#b45f06",
+                "fillcolor": "#FDF1E6",
+                "color": "#A7774B",
             },
             "pool": {
                 "shape": "ellipse",
                 "style": "filled",
-                "fillcolor": "#f4cccc",
-                "color": "#b45f06",
+                "fillcolor": "#F7F0E6",
+                "color": "#8D7A5B",
             },
         }
 
@@ -1587,6 +1591,7 @@ def generate_diagram(user_task: str, reference_description: dict | str | None = 
 def main(
     explain_critic_influence: bool = True,
     use_test_prompt: bool = True,
+    critic_ab_replay: bool = False,
 ):
 
     default_prompt = """Нарисуй 3D архитектурную диаграмму гибридной модели “ResNet18 + Qwen 3.5 + ANFIS” в стиле PlotNeuralNet.
@@ -1675,6 +1680,79 @@ def main(
     save_json_artifact("draft.json", draft, base_dir=run_dir)
     save_json_artifact("final.json", final_clean, base_dir=run_dir)
 
+    if critic_ab_replay:
+        print("\n=== ШАГ 3.5: A/B replay (с критиком vs без критика) ===")
+        neutral_critique = {
+            "score": 1.0,
+            "task_fit_score": 1.0,
+            "visual_score": 1.0,
+            "missing_requirements": [],
+            "wrong_interpretations": [],
+            "extra_elements": [],
+            "visual_problems": [],
+            "problems": [],
+            "fixes": [],
+        }
+        try:
+            counterfactual_final = improve_diagram(user_task, draft, neutral_critique)
+            counterfactual_clean = clean_diagram_labels(counterfactual_final)
+            save_json_artifact(
+                "counterfactual_final_no_critic.json",
+                counterfactual_clean,
+                base_dir=run_dir,
+            )
+
+            factual_change = compute_change_metrics(draft, final_clean)
+            counter_change = compute_change_metrics(draft, counterfactual_clean)
+            factual_listen = compute_critic_listening_metrics(draft, critique, final_clean)
+            counter_listen = compute_critic_listening_metrics(draft, critique, counterfactual_clean)
+
+            ab_report = {
+                "run_id": output_filename,
+                "factual_change": factual_change,
+                "counterfactual_change_no_critic": counter_change,
+                "factual_listening": factual_listen,
+                "counterfactual_listening_no_critic": counter_listen,
+                "critic_effect_delta": {
+                    "alignment_gain": float(
+                        factual_listen.get("critic_alignment_score", 0.0)
+                        - counter_listen.get("critic_alignment_score", 0.0)
+                    ),
+                    "ignored_rate_reduction": float(
+                        counter_listen.get("critic_ignored_rate", 0.0)
+                        - factual_listen.get("critic_ignored_rate", 0.0)
+                    ),
+                    "change_score_delta": float(
+                        factual_change.get("change_score", 0.0)
+                        - counter_change.get("change_score", 0.0)
+                    ),
+                },
+                "assumption": (
+                    "Counterfactual uses same draft and model, but neutral critique. "
+                    "Difference estimates practical critic effect, not strict causality."
+                ),
+            }
+            save_json_artifact("critic_ab_replay_report.json", ab_report, base_dir=run_dir)
+            (run_dir / "critic_ab_replay_summary.md").write_text(
+                "# Critic A/B Replay Summary\n\n"
+                f"- run_id: `{output_filename}`\n"
+                f"- alignment_gain: `{ab_report['critic_effect_delta']['alignment_gain']}`\n"
+                f"- ignored_rate_reduction: `{ab_report['critic_effect_delta']['ignored_rate_reduction']}`\n"
+                f"- change_score_delta: `{ab_report['critic_effect_delta']['change_score_delta']}`\n\n"
+                "Interpretation:\n"
+                "- `alignment_gain > 0` means solution with critique follows critique better.\n"
+                "- `ignored_rate_reduction > 0` means critique is less ignored in factual run.\n",
+                encoding="utf-8",
+            )
+            print(f"[critic-ab] report={run_dir / 'critic_ab_replay_report.json'}")
+        except Exception as exc:
+            save_json_artifact(
+                "critic_ab_replay_report.json",
+                {"run_id": output_filename, "status": "error_fallback", "reason": str(exc)},
+                base_dir=run_dir,
+            )
+            print(f"[critic-ab] fallback due to error: {exc}")
+
     if explain_critic_influence:
         print("\n=== ШАГ 4: Анализ влияния критика ===")
         try:
@@ -1732,6 +1810,12 @@ def parse_cli_args() -> argparse.Namespace:
         action="store_true",
         help="Ignore _test_prompt.txt and use default prompt from main.py.",
     )
+    parser.add_argument(
+        "--critic-ab-replay",
+        choices=["on", "off"],
+        default="off",
+        help="Run counterfactual improve pass with neutral critique and save A/B effect report.",
+    )
     return parser.parse_args()
 
 
@@ -1739,10 +1823,12 @@ if __name__ == "__main__":
     args = parse_cli_args()
     explain = args.explain_critic_influence == "on"
     use_test_prompt = not args.ignore_test_prompt
+    ab_replay = args.critic_ab_replay == "on"
     if args.no_auto_servers:
         main(
             explain_critic_influence=explain,
             use_test_prompt=use_test_prompt,
+            critic_ab_replay=ab_replay,
         )
     else:
         with ServerManager() as manager:
@@ -1750,5 +1836,6 @@ if __name__ == "__main__":
             main(
                 explain_critic_influence=explain,
                 use_test_prompt=use_test_prompt,
+                critic_ab_replay=ab_replay,
             )
             manager.stop_all()

@@ -12,6 +12,7 @@ if str(ROOT) not in sys.path:
 
 from critic_influence import (
     CriticInfluenceAnalyzer,
+    compute_critic_listening_metrics,
     compute_change_metrics,
     extract_critique_features,
 )
@@ -34,6 +35,8 @@ class CriticInfluenceTests(unittest.TestCase):
         self.assertEqual(f["missing_requirements_count"], 2.0)
         self.assertEqual(f["visual_problems_count"], 3.0)
         self.assertAlmostEqual(f["severity_score"], 0.6, places=6)
+        self.assertIn("semantic_action_hits", f)
+        self.assertIn("critic_specificity_score", f)
 
     def test_compute_change_metrics(self) -> None:
         draft = {
@@ -91,6 +94,86 @@ class CriticInfluenceTests(unittest.TestCase):
             payload = json.loads(report_path.read_text(encoding="utf-8"))
             self.assertIn("features", payload)
             self.assertIn("targets", payload)
+            self.assertIn("critic_traceability", payload)
+
+    def test_critic_listening_metrics_range(self) -> None:
+        draft = {
+            "nodes": [
+                {"id": "a", "label": "Input", "kind": "input"},
+                {"id": "b", "label": "ResNet Backbone", "kind": "block"},
+            ],
+            "edges": [{"source": "a", "target": "b"}],
+        }
+        final = {
+            "nodes": [
+                {"id": "a", "label": "Input", "kind": "input"},
+                {"id": "b", "label": "ResNet Backbone", "kind": "block"},
+                {"id": "c", "label": "Qwen Encoder", "kind": "block"},
+                {"id": "d", "label": "ANFIS Fusion", "kind": "concat"},
+            ],
+            "edges": [
+                {"source": "a", "target": "b"},
+                {"source": "b", "target": "d"},
+                {"source": "c", "target": "d"},
+            ],
+        }
+        critique = {
+            "fixes": ["Добавить Qwen Encoder", "Добавить ANFIS Fusion"],
+            "problems": ["Нет мультимодального слияния"],
+            "missing_requirements": ["Нет Qwen ветки"],
+            "wrong_interpretations": [],
+            "extra_elements": [],
+        }
+        m = compute_critic_listening_metrics(draft, critique, final)
+        for k in [
+            "fixes_coverage",
+            "problems_addressed_rate",
+            "critic_ignored_rate",
+            "contradiction_rate",
+            "critic_alignment_score",
+            "critic_precision_proxy",
+            "critic_recall_proxy",
+            "critic_listening_f1",
+            "critic_listening_confidence",
+        ]:
+            self.assertGreaterEqual(m[k], 0.0)
+            self.assertLessEqual(m[k], 1.0)
+        self.assertGreater(m["fixes_coverage"], 0.0)
+        self.assertGreaterEqual(m["actionable_items_count"], 1.0)
+        self.assertGreaterEqual(m["actionable_items_matched_count"], 1.0)
+
+    def test_traceability_contains_matches(self) -> None:
+        from critic_influence import compute_critic_traceability
+
+        draft = {
+            "nodes": [
+                {"id": "a", "label": "Input", "kind": "input"},
+                {"id": "b", "label": "Backbone", "kind": "block"},
+            ],
+            "edges": [{"source": "a", "target": "b"}],
+        }
+        final = {
+            "nodes": [
+                {"id": "a", "label": "Input", "kind": "input"},
+                {"id": "b", "label": "Backbone", "kind": "block"},
+                {"id": "c", "label": "Qwen Encoder", "kind": "block"},
+            ],
+            "edges": [
+                {"source": "a", "target": "b"},
+                {"source": "c", "target": "b"},
+            ],
+        }
+        critique = {
+            "fixes": ["add qwen encoder"],
+            "problems": ["missing fusion branch"],
+            "missing_requirements": [],
+            "wrong_interpretations": [],
+        }
+        t = compute_critic_traceability(draft, critique, final)
+        self.assertIn("match_rate", t)
+        self.assertGreaterEqual(float(t["match_rate"]), 0.0)
+        self.assertLessEqual(float(t["match_rate"]), 1.0)
+        self.assertGreaterEqual(int(t["matched_items"]), 1)
 
 
 if __name__ == "__main__":

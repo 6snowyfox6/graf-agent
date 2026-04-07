@@ -6,6 +6,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+import re
 
 
 def _safe_float(value: Any, default: float = 0.0) -> float:
@@ -30,6 +31,13 @@ def _text_len_list_field(obj: dict[str, Any], key: str) -> int:
     for item in value:
         total += len(str(item))
     return total
+
+
+def _list_items_as_text(obj: dict[str, Any], key: str) -> list[str]:
+    value = obj.get(key, [])
+    if not isinstance(value, list):
+        return []
+    return [str(item).strip() for item in value if str(item).strip()]
 
 
 def _edge_set(diagram: dict[str, Any]) -> set[tuple[str, str]]:
@@ -63,6 +71,40 @@ def extract_critique_features(critique: dict[str, Any]) -> dict[str, float]:
     task_fit = _safe_float(critique.get("task_fit_score"), 0.0)
     visual = _safe_float(critique.get("visual_score"), 0.0)
 
+    missing_items = _list_items_as_text(critique, "missing_requirements")
+    wrong_items = _list_items_as_text(critique, "wrong_interpretations")
+    extra_items = _list_items_as_text(critique, "extra_elements")
+    visual_items = _list_items_as_text(critique, "visual_problems")
+    problem_items = _list_items_as_text(critique, "problems")
+    fix_items = _list_items_as_text(critique, "fixes")
+    all_items_text = " ".join(missing_items + wrong_items + extra_items + visual_items + problem_items + fix_items)
+    all_tokens = _tokenize(all_items_text)
+
+    action_markers = {
+        "add", "remove", "rename", "connect", "merge", "split", "replace", "fix",
+        "добав", "удал", "переимен", "соедин", "объедин", "раздел", "замен", "исправ",
+    }
+    architecture_markers = {
+        "resnet", "qwen", "anfis", "transformer", "encoder", "decoder", "unet", "yolo", "gan",
+        "реснет", "квен", "анфис", "трансформер", "энкодер", "декодер", "юнет",
+    }
+    visual_markers = {
+        "label", "color", "palette", "style", "layout", "arrow", "overlap",
+        "подпись", "цвет", "палитр", "стиль", "лейаут", "стрелк", "налез",
+    }
+    structural_markers = {
+        "node", "edge", "branch", "fusion", "concat", "skip", "output", "input",
+        "узел", "ребро", "ветк", "слиян", "выход", "вход",
+    }
+
+    action_hits = len([t for t in all_tokens if t in action_markers])
+    architecture_hits = len([t for t in all_tokens if t in architecture_markers])
+    visual_hits = len([t for t in all_tokens if t in visual_markers])
+    structural_hits = len([t for t in all_tokens if t in structural_markers])
+    unique_token_count = len(all_tokens)
+    all_text_len = max(1, len(all_items_text))
+    specificity_score = min(1.0, unique_token_count / 40.0) * min(1.0, all_text_len / 800.0)
+
     features: dict[str, float] = {
         "score": score,
         "task_fit_score": task_fit,
@@ -80,6 +122,12 @@ def extract_critique_features(critique: dict[str, Any]) -> dict[str, float]:
         "visual_problems_text_len": float(_text_len_list_field(critique, "visual_problems")),
         "problems_text_len": float(_text_len_list_field(critique, "problems")),
         "fixes_text_len": float(_text_len_list_field(critique, "fixes")),
+        "semantic_action_hits": float(action_hits),
+        "semantic_architecture_hits": float(architecture_hits),
+        "semantic_visual_hits": float(visual_hits),
+        "semantic_structural_hits": float(structural_hits),
+        "semantic_unique_tokens": float(unique_token_count),
+        "critic_specificity_score": float(specificity_score),
     }
     return features
 
@@ -138,6 +186,280 @@ def compute_change_metrics(draft: dict[str, Any], final: dict[str, Any]) -> dict
         "changed_labels_count": float(changed_labels),
         "changed_kinds_count": float(changed_kinds),
         "change_score": float(change_score),
+    }
+
+
+def _tokenize(text: str) -> set[str]:
+    text = str(text or "").lower()
+    parts = re.split(r"[^a-zа-я0-9]+", text, flags=re.IGNORECASE)
+    return {p for p in parts if len(p) >= 3}
+
+
+def _collect_change_corpus(draft: dict[str, Any], final: dict[str, Any]) -> str:
+    draft_labels, draft_kinds = _node_maps(draft)
+    final_labels, final_kinds = _node_maps(final)
+    draft_ids = set(draft_labels.keys())
+    final_ids = set(final_labels.keys())
+    common_ids = draft_ids & final_ids
+
+    chunks: list[str] = []
+    for node_id in sorted(final_ids - draft_ids):
+        chunks.append(final_labels.get(node_id, ""))
+        chunks.append(final_kinds.get(node_id, ""))
+    for node_id in sorted(draft_ids - final_ids):
+        chunks.append(draft_labels.get(node_id, ""))
+        chunks.append(draft_kinds.get(node_id, ""))
+    for node_id in sorted(common_ids):
+        if draft_labels.get(node_id) != final_labels.get(node_id):
+            chunks.append(draft_labels.get(node_id, ""))
+            chunks.append(final_labels.get(node_id, ""))
+        if draft_kinds.get(node_id) != final_kinds.get(node_id):
+            chunks.append(draft_kinds.get(node_id, ""))
+            chunks.append(final_kinds.get(node_id, ""))
+
+    draft_edges = _edge_set(draft)
+    final_edges = _edge_set(final)
+    for s, t in sorted(final_edges - draft_edges):
+        chunks.append(f"{s} {t}")
+    for s, t in sorted(draft_edges - final_edges):
+        chunks.append(f"{s} {t}")
+
+    return " ".join(chunks)
+
+
+def _collect_change_entries(draft: dict[str, Any], final: dict[str, Any]) -> list[dict[str, str]]:
+    draft_labels, draft_kinds = _node_maps(draft)
+    final_labels, final_kinds = _node_maps(final)
+    draft_ids = set(draft_labels.keys())
+    final_ids = set(final_labels.keys())
+    common_ids = draft_ids & final_ids
+
+    entries: list[dict[str, str]] = []
+    for node_id in sorted(final_ids - draft_ids):
+        label = final_labels.get(node_id, "")
+        kind = final_kinds.get(node_id, "")
+        entries.append(
+            {
+                "type": "added_node",
+                "text": f"added node {node_id} {label} {kind}".strip(),
+            }
+        )
+    for node_id in sorted(draft_ids - final_ids):
+        label = draft_labels.get(node_id, "")
+        kind = draft_kinds.get(node_id, "")
+        entries.append(
+            {
+                "type": "removed_node",
+                "text": f"removed node {node_id} {label} {kind}".strip(),
+            }
+        )
+    for node_id in sorted(common_ids):
+        d_label = draft_labels.get(node_id, "")
+        f_label = final_labels.get(node_id, "")
+        d_kind = draft_kinds.get(node_id, "")
+        f_kind = final_kinds.get(node_id, "")
+        if d_label != f_label:
+            entries.append(
+                {
+                    "type": "changed_label",
+                    "text": f"changed label {node_id}: {d_label} -> {f_label}",
+                }
+            )
+        if d_kind != f_kind:
+            entries.append(
+                {
+                    "type": "changed_kind",
+                    "text": f"changed kind {node_id}: {d_kind} -> {f_kind}",
+                }
+            )
+
+    draft_edges = _edge_set(draft)
+    final_edges = _edge_set(final)
+    for s, t in sorted(final_edges - draft_edges):
+        entries.append({"type": "added_edge", "text": f"added edge {s} -> {t}"})
+    for s, t in sorted(draft_edges - final_edges):
+        entries.append({"type": "removed_edge", "text": f"removed edge {s} -> {t}"})
+    return entries
+
+
+def _item_matches_change(item: str, change_tokens: set[str]) -> bool:
+    item_tokens = _tokenize(item)
+    if not item_tokens:
+        return False
+    inter = item_tokens & change_tokens
+    # strict enough to avoid random collisions for long phrases
+    if len(item_tokens) >= 4:
+        return len(inter) >= 2
+    return len(inter) >= 1
+
+
+def compute_critic_listening_metrics(
+    draft: dict[str, Any],
+    critique: dict[str, Any],
+    final: dict[str, Any],
+) -> dict[str, float]:
+    change_corpus = _collect_change_corpus(draft, final)
+    change_tokens = _tokenize(change_corpus)
+
+    fixes = [str(x) for x in critique.get("fixes", []) if str(x).strip()]
+    problems = [str(x) for x in critique.get("problems", []) if str(x).strip()]
+    missing = [str(x) for x in critique.get("missing_requirements", []) if str(x).strip()]
+    wrong = [str(x) for x in critique.get("wrong_interpretations", []) if str(x).strip()]
+    extras = [str(x) for x in critique.get("extra_elements", []) if str(x).strip()]
+
+    def _match_count(items: list[str]) -> int:
+        if not items:
+            return 0
+        return sum(1 for item in items if _item_matches_change(item, change_tokens))
+
+    def _match_rate(items: list[str]) -> float:
+        if not items:
+            return 1.0
+        matched = _match_count(items)
+        return float(matched / max(1, len(items)))
+
+    fixes_coverage = _match_rate(fixes)
+    problems_addressed = _match_rate(problems + missing + wrong)
+
+    # If critique said "extra elements", contradiction means these tokens still appear in final labels.
+    final_text = " ".join(str(n.get("label", "")) for n in final.get("nodes", []) if isinstance(n, dict))
+    final_tokens = _tokenize(final_text)
+    if extras:
+        contrad = sum(1 for item in extras if (_tokenize(item) & final_tokens))
+        contradiction_rate = float(contrad / max(1, len(extras)))
+    else:
+        contradiction_rate = 0.0
+
+    ignored_rate = max(0.0, 1.0 - fixes_coverage)
+
+    # How focused changes are on critique vocabulary (proxy for "listening precision").
+    critique_tokens = _tokenize(" ".join(fixes + problems + missing + wrong + extras))
+    if change_tokens:
+        precision_proxy = float(len(change_tokens & critique_tokens) / max(1, len(change_tokens)))
+    else:
+        precision_proxy = 0.0
+
+    actionable_items = fixes + problems + missing + wrong
+    matched_actionable = _match_count(actionable_items)
+    recall_proxy = float(matched_actionable / max(1, len(actionable_items))) if actionable_items else 1.0
+    if precision_proxy + recall_proxy > 1e-9:
+        listening_f1 = float(2.0 * precision_proxy * recall_proxy / (precision_proxy + recall_proxy))
+    else:
+        listening_f1 = 0.0
+
+    evidence_scale = min(1.0, (len(actionable_items) + len(change_tokens)) / 20.0)
+    listening_confidence = max(0.0, min(1.0, evidence_scale * (1.0 - 0.5 * contradiction_rate)))
+
+    alignment_score = max(
+        0.0,
+        min(
+            1.0,
+            0.55 * fixes_coverage + 0.35 * problems_addressed + 0.10 * (1.0 - contradiction_rate),
+        ),
+    )
+
+    return {
+        "fixes_coverage": float(fixes_coverage),
+        "problems_addressed_rate": float(problems_addressed),
+        "critic_ignored_rate": float(ignored_rate),
+        "contradiction_rate": float(contradiction_rate),
+        "critic_alignment_score": float(alignment_score),
+        "critic_precision_proxy": float(precision_proxy),
+        "critic_recall_proxy": float(recall_proxy),
+        "critic_listening_f1": float(listening_f1),
+        "critic_listening_confidence": float(listening_confidence),
+        "actionable_items_count": float(len(actionable_items)),
+        "actionable_items_matched_count": float(matched_actionable),
+    }
+
+
+def _best_match(item: str, change_entries: list[dict[str, str]]) -> dict[str, Any]:
+    item_tokens = _tokenize(item)
+    best: dict[str, Any] = {
+        "matched": False,
+        "best_change": "",
+        "best_change_type": "",
+        "overlap_tokens": [],
+        "overlap_score": 0.0,
+    }
+    if not item_tokens:
+        return best
+
+    best_score = 0.0
+    best_overlap: set[str] = set()
+    best_text = ""
+    best_type = ""
+    for entry in change_entries:
+        text = str(entry.get("text", ""))
+        entry_tokens = _tokenize(text)
+        if not entry_tokens:
+            continue
+        overlap = item_tokens & entry_tokens
+        if not overlap:
+            continue
+        score = len(overlap) / max(1, len(item_tokens))
+        if len(item_tokens) >= 4 and len(overlap) < 2:
+            score *= 0.6
+        if score > best_score:
+            best_score = score
+            best_overlap = overlap
+            best_text = text
+            best_type = str(entry.get("type", ""))
+
+    if best_score > 0.0:
+        best["matched"] = True
+        best["best_change"] = best_text
+        best["best_change_type"] = best_type
+        best["overlap_tokens"] = sorted(best_overlap)
+        best["overlap_score"] = float(min(1.0, best_score))
+    return best
+
+
+def compute_critic_traceability(
+    draft: dict[str, Any],
+    critique: dict[str, Any],
+    final: dict[str, Any],
+) -> dict[str, Any]:
+    change_entries = _collect_change_entries(draft, final)
+    fixes = _list_items_as_text(critique, "fixes")
+    problems = _list_items_as_text(critique, "problems")
+    missing = _list_items_as_text(critique, "missing_requirements")
+    wrong = _list_items_as_text(critique, "wrong_interpretations")
+
+    def _link(items: list[str], kind: str) -> list[dict[str, Any]]:
+        out: list[dict[str, Any]] = []
+        for item in items:
+            match = _best_match(item, change_entries)
+            out.append(
+                {
+                    "kind": kind,
+                    "critique_item": item,
+                    **match,
+                }
+            )
+        return out
+
+    linked = (
+        _link(fixes, "fix")
+        + _link(problems, "problem")
+        + _link(missing, "missing_requirement")
+        + _link(wrong, "wrong_interpretation")
+    )
+    matched = [x for x in linked if bool(x.get("matched"))]
+    unmatched = [x for x in linked if not bool(x.get("matched"))]
+
+    matched_sorted = sorted(matched, key=lambda x: float(x.get("overlap_score", 0.0)), reverse=True)
+    unmatched_sorted = sorted(unmatched, key=lambda x: (str(x.get("kind", "")), str(x.get("critique_item", ""))))
+
+    return {
+        "total_actionable_items": len(linked),
+        "matched_items": len(matched_sorted),
+        "unmatched_items": len(unmatched_sorted),
+        "match_rate": float(len(matched_sorted) / max(1, len(linked))) if linked else 1.0,
+        "top_matches": matched_sorted[:8],
+        "unmatched_actionable_items": unmatched_sorted[:8],
+        "change_entries_count": len(change_entries),
+        "change_entries_preview": change_entries[:10],
     }
 
 
@@ -472,6 +794,66 @@ class CriticInfluenceAnalyzer:
         except Exception:
             return None
 
+    def _write_traceability_plot(
+        self,
+        run_dir: Path,
+        traceability: dict[str, Any],
+    ) -> str | None:
+        if not isinstance(traceability, dict) or not traceability:
+            return None
+        try:
+            import matplotlib
+            matplotlib.use("Agg")
+            import matplotlib.pyplot as plt  # type: ignore
+        except Exception:
+            return None
+
+        try:
+            matched = int(traceability.get("matched_items", 0))
+            unmatched = int(traceability.get("unmatched_items", 0))
+            top_matches = traceability.get("top_matches", [])
+            if not isinstance(top_matches, list):
+                top_matches = []
+
+            fig = plt.figure(figsize=(12, 7))
+            gs = fig.add_gridspec(1, 2, width_ratios=[1.0, 1.45])
+            ax0 = fig.add_subplot(gs[0, 0])
+            ax1 = fig.add_subplot(gs[0, 1])
+
+            ax0.bar(["Matched", "Unmatched"], [matched, unmatched], color=["#2E8B57", "#B22222"])
+            ax0.set_title("Critique Item Coverage", fontsize=13)
+            ax0.set_ylabel("Count", fontsize=11)
+            for idx, v in enumerate([matched, unmatched]):
+                ax0.text(idx, v + 0.05, str(v), ha="center", va="bottom", fontsize=10)
+
+            rows = top_matches[:5]
+            if rows:
+                labels: list[str] = []
+                scores: list[float] = []
+                for item in rows:
+                    crit = str(item.get("critique_item", "")).strip()
+                    chg = str(item.get("best_change", "")).strip()
+                    score = float(item.get("overlap_score", 0.0))
+                    compact = f"{crit[:28]} -> {chg[:28]}"
+                    labels.append(compact)
+                    scores.append(score)
+                ax1.barh(labels[::-1], scores[::-1], color="#3B82F6")
+                ax1.set_xlim(0.0, 1.0)
+                ax1.set_xlabel("Overlap score", fontsize=11)
+                ax1.set_title("Top fix -> change links", fontsize=13)
+            else:
+                ax1.axis("off")
+                ax1.text(0.5, 0.5, "No matches for top links", ha="center", va="center", fontsize=12)
+
+            fig.suptitle("Critic Traceability (Current Run)", fontsize=14)
+            fig.subplots_adjust(left=0.08, right=0.98, bottom=0.12, top=0.90, wspace=0.28)
+            out = run_dir / "critic_traceability.png"
+            fig.savefig(out, dpi=170, bbox_inches="tight", pad_inches=0.2)
+            plt.close(fig)
+            return out.name
+        except Exception:
+            return None
+
     def _make_summary_md(self, report: dict[str, Any]) -> str:
         lines: list[str] = []
         lines.append("# Critic Influence Summary")
@@ -483,6 +865,53 @@ class CriticInfluenceAnalyzer:
         lines.append("## Change Metrics")
         for k, v in report.get("targets", {}).items():
             lines.append(f"- `{k}`: `{v}`")
+        lines.append("")
+        lines.append("## Critic Listening Metrics")
+        listening = report.get("critic_listening", {})
+        if isinstance(listening, dict) and listening:
+            for k, v in listening.items():
+                lines.append(f"- `{k}`: `{v}`")
+        else:
+            lines.append("- no listening metrics available")
+        lines.append("")
+        lines.append("## Listening Verdict")
+        if isinstance(listening, dict) and listening:
+            f1 = float(listening.get("critic_listening_f1", 0.0))
+            conf = float(listening.get("critic_listening_confidence", 0.0))
+            align = float(listening.get("critic_alignment_score", 0.0))
+            if f1 >= 0.66 and align >= 0.66:
+                verdict = "generator mostly follows critic feedback"
+            elif f1 >= 0.40 and align >= 0.45:
+                verdict = "generator partially follows critic feedback"
+            else:
+                verdict = "generator weakly follows critic feedback"
+            lines.append(f"- verdict: **{verdict}**")
+            lines.append(f"- confidence: `{conf:.3f}`")
+        else:
+            lines.append("- verdict unavailable (no listening metrics)")
+        lines.append("")
+        lines.append("## Fix-to-Change Traceability")
+        trace = report.get("critic_traceability", {})
+        if isinstance(trace, dict) and trace:
+            lines.append(f"- `match_rate`: `{float(trace.get('match_rate', 0.0)):.3f}`")
+            lines.append(f"- `matched_items`: `{trace.get('matched_items', 0)}`")
+            lines.append(f"- `unmatched_items`: `{trace.get('unmatched_items', 0)}`")
+            top_matches = trace.get("top_matches", [])
+            if isinstance(top_matches, list) and top_matches:
+                lines.append("- top matches:")
+                for item in top_matches[:4]:
+                    crit = str(item.get("critique_item", "")).strip()
+                    chg = str(item.get("best_change", "")).strip()
+                    score = float(item.get("overlap_score", 0.0))
+                    lines.append(f"  - `{crit}` -> `{chg}` (score={score:.2f})")
+            top_unmatched = trace.get("unmatched_actionable_items", [])
+            if isinstance(top_unmatched, list) and top_unmatched:
+                lines.append("- unmatched items:")
+                for item in top_unmatched[:4]:
+                    crit = str(item.get("critique_item", "")).strip()
+                    lines.append(f"  - `{crit}`")
+        else:
+            lines.append("- traceability unavailable")
         lines.append("")
         lines.append("## Top Local Contributions")
         local = report.get("local_contributions", {})
@@ -523,6 +952,13 @@ class CriticInfluenceAnalyzer:
 
         features = extract_critique_features(critique)
         targets = compute_change_metrics(draft, final)
+        listening = compute_critic_listening_metrics(draft, critique, final)
+        traceability = compute_critic_traceability(draft, critique, final)
+        targets = {
+            **targets,
+            "critic_alignment_score": float(listening.get("critic_alignment_score", 0.0)),
+            "critic_listening_f1": float(listening.get("critic_listening_f1", 0.0)),
+        }
         record = {
             "run_id": run_id,
             "ts": int(time.time()),
@@ -544,6 +980,9 @@ class CriticInfluenceAnalyzer:
         )
         if local_plot:
             plot_files.append(local_plot)
+        trace_plot = self._write_traceability_plot(run_path, traceability)
+        if trace_plot:
+            plot_files.append(trace_plot)
 
         report = {
             "status": status,
@@ -551,6 +990,8 @@ class CriticInfluenceAnalyzer:
             "history_size": len(history),
             "features": features,
             "targets": targets,
+            "critic_listening": listening,
+            "critic_traceability": traceability,
             "predicted_change_score": explain_payload.get("predicted_change_score"),
             "local_contributions": explain_payload.get("local_contributions", {}),
             "aggregate_importance": explain_payload.get("aggregate_importance", {}),
