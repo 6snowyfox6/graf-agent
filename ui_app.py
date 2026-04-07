@@ -50,27 +50,176 @@ SHAP_INCLUDE_MARKERS = (
 )
 
 CSS = r'''
-:root {
+:root,
+html.light,
+body.light,
+.light,
+html[data-theme="light"],
+body[data-theme="light"],
+[data-theme="light"] {
+    --bg: #eef3fb;
+    --bg-2: #f7f9fc;
+    --surface: rgba(255, 255, 255, 0.96);
+    --surface-2: rgba(246, 248, 252, 0.98);
+    --surface-soft: rgba(243, 246, 251, 0.96);
+    --border: rgba(15, 23, 42, 0.10);
+    --dash-border: rgba(15, 23, 42, 0.12);
+    --text: #1d2738;
+    --muted: rgba(29, 39, 56, 0.62);
+    --shadow: 0 20px 48px rgba(18, 31, 53, 0.12);
+    --overlay-bg: rgba(17, 24, 39, 0.30);
+    --button-secondary-bg: rgba(17, 24, 39, 0.06);
+    --button-secondary-hover: rgba(17, 24, 39, 0.10);
+    --button-secondary-border: rgba(15, 23, 42, 0.10);
+    --button-secondary-text: #1d2738;
+    --input-placeholder: rgba(29, 39, 56, 0.42);
+    --accent: #5b5cf0;
+    --accent-soft: rgba(91, 92, 240, 0.14);
+}
+
+html.dark,
+body.dark,
+.dark,
+html[data-theme="dark"],
+body[data-theme="dark"],
+[data-theme="dark"] {
     --bg: #071120;
     --bg-2: #0a1730;
     --surface: rgba(26, 35, 52, 0.97);
+    --surface-2: rgba(22, 31, 48, 0.98);
+    --surface-soft: rgba(255, 255, 255, 0.02);
     --border: rgba(255, 255, 255, 0.08);
+    --dash-border: rgba(255, 255, 255, 0.10);
     --text: #e8ecf5;
     --muted: rgba(232, 236, 245, 0.68);
     --shadow: 0 22px 50px rgba(0, 0, 0, 0.30);
+    --overlay-bg: rgba(4, 10, 20, 0.72);
+    --button-secondary-bg: rgba(255, 255, 255, 0.10);
+    --button-secondary-hover: rgba(255, 255, 255, 0.16);
+    --button-secondary-border: rgba(255, 255, 255, 0.10);
+    --button-secondary-text: #e8ecf5;
+    --input-placeholder: rgba(232, 236, 245, 0.45);
+    --accent: #5b5cf0;
+    --accent-soft: rgba(91, 92, 240, 0.16);
 }
 
-html, body {
+html,
+body {
     min-width: 1360px;
-    background: radial-gradient(circle at top, #0a1730 0%, #071120 58%);
+    background: linear-gradient(180deg, var(--bg-2) 0%, var(--bg) 100%) !important;
     overflow-x: auto;
 }
 
+body::before {
+    content: "";
+    position: fixed;
+    inset: 0;
+    background: linear-gradient(180deg, var(--bg-2) 0%, var(--bg) 100%);
+    z-index: -2;
+}
+
+html.dark body,
+body.dark,
+.dark body,
+html[data-theme="dark"] body,
+body[data-theme="dark"] {
+    color-scheme: dark;
+}
+
+html.light body,
+body.light,
+.light body,
+html[data-theme="light"] body,
+body[data-theme="light"] {
+    color-scheme: light;
+}
+
+html,
+body {
+    min-width: 1360px;
+    background: linear-gradient(180deg, var(--bg-2) 0%, var(--bg) 100%) !important;
+    overflow-x: auto;
+}
+
+body::before {
+    content: "";
+    position: fixed;
+    inset: 0;
+    background: linear-gradient(180deg, var(--bg-2) 0%, var(--bg) 100%);
+    z-index: -2;
+}
+
 .gradio-container {
+    --background-fill-primary: transparent !important;
+    --background-fill-secondary: transparent !important;
+    --body-background-fill: transparent !important;
+    --body-text-color: var(--text) !important;
+    --body-text-color-subdued: var(--muted) !important;
+    --color-accent: var(--accent) !important;
+    --color-accent-soft: var(--accent-soft) !important;
+    --border-color-primary: var(--border) !important;
+    --block-background-fill: var(--surface) !important;
+    --block-border-color: var(--border) !important;
+    --block-label-text-color: var(--text) !important;
+    --block-title-text-color: var(--text) !important;
+    --input-background-fill: var(--surface-2) !important;
+    --input-border-color: var(--border) !important;
+    --input-placeholder-color: var(--input-placeholder) !important;
+    --checkbox-label-text-color: var(--text) !important;
+    --button-secondary-background-fill: var(--button-secondary-bg) !important;
+    --button-secondary-background-fill-hover: var(--button-secondary-hover) !important;
+    --button-secondary-border-color: var(--button-secondary-border) !important;
+    --button-secondary-text-color: var(--button-secondary-text) !important;
     width: 100% !important;
     max-width: none !important;
     margin: 0 !important;
     padding: 20px 24px 24px !important;
+    color: var(--text) !important;
+}
+
+.gradio-container,
+.gradio-container .wrap,
+.gradio-container .prose,
+.gradio-container label,
+.gradio-container span,
+.gradio-container p,
+.gradio-container h1,
+.gradio-container h2,
+.gradio-container h3,
+.gradio-container h4,
+.gradio-container h5 {
+    color: var(--text) !important;
+}
+
+.gradio-container textarea,
+.gradio-container input,
+.gradio-container select {
+    background: var(--surface-2) !important;
+    color: var(--text) !important;
+    border-color: var(--border) !important;
+}
+
+.gradio-container textarea::placeholder,
+.gradio-container input::placeholder {
+    color: var(--input-placeholder) !important;
+}
+
+.gradio-container button.secondary {
+    background: var(--button-secondary-bg) !important;
+    color: var(--button-secondary-text) !important;
+    border-color: var(--button-secondary-border) !important;
+}
+
+.gradio-container button.secondary:hover {
+    background: var(--button-secondary-hover) !important;
+}
+
+.gradio-container [data-testid="image"],
+.gradio-container [data-testid="image"] > div,
+.gradio-container .upload-container,
+.gradio-container .empty {
+    background: var(--surface-2) !important;
+    color: var(--text) !important;
 }
 
 #app-shell {
@@ -190,7 +339,7 @@ html, body {
 
 #preview-placeholder {
     height: 760px;
-    border: 1px dashed rgba(255,255,255,0.10);
+    border: 1px dashed var(--dash-border);
     border-radius: 18px;
     display: flex;
     align-items: center;
@@ -198,7 +347,7 @@ html, body {
     color: var(--muted);
     font-size: 18px;
     text-align: center;
-    background: rgba(255,255,255,0.02);
+    background: var(--surface-soft);
 }
 
 #preview-box,
@@ -221,7 +370,7 @@ html, body {
     position: fixed !important;
     inset: 0 !important;
     z-index: 9999 !important;
-    background: rgba(4, 10, 20, 0.72) !important;
+    background: var(--overlay-bg) !important;
     display: flex !important;
     align-items: center !important;
     justify-content: center !important;
@@ -281,7 +430,7 @@ html, body {
 
 #shap-placeholder {
     height: 700px;
-    border: 1px dashed rgba(255,255,255,0.10);
+    border: 1px dashed var(--dash-border);
     border-radius: 18px;
     display: flex;
     align-items: center;
@@ -289,7 +438,7 @@ html, body {
     color: var(--muted);
     font-size: 18px;
     text-align: center;
-    background: rgba(255,255,255,0.02);
+    background: var(--surface-soft);
 }
 
 #shap-box,
@@ -315,6 +464,7 @@ html, body {
         max-width: 430px !important;
     }
 }
+
 '''
 
 
