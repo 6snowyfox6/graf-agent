@@ -1200,45 +1200,88 @@ def clean_diagram_labels(diagram: dict) -> dict:
     return pipeline_clean_diagram_labels(diagram)
 
 def build_patch_plan(critique_json: dict) -> dict:
-    def _push(dst: list[dict], items: list, severity: str, prefix: str) -> None:
+    def _collect(items: list, severity: str, prefix: str) -> list[dict]:
+        out = []
         for item in items or []:
             text = str(item or "").strip()
             if not text:
                 continue
-            dst.append({
+            out.append({
                 "issue": text,
                 "instruction": f"{prefix}{text}".strip(),
                 "severity": severity,
             })
+        return out
 
-    must_fix: list[dict] = []
-    _push(must_fix, critique_json.get("missing_requirements", []), "high", "Добавь или восстанови: ")
-    _push(must_fix, critique_json.get("wrong_interpretations", []), "high", "Исправь неверную трактовку: ")
-    _push(must_fix, critique_json.get("extra_elements", []), "high", "Удали лишнее или замени на корректное: ")
-    _push(must_fix, critique_json.get("fixes", []), "high", "")
-    _push(must_fix, critique_json.get("problems", []), "medium", "Исправь проблему: ")
-    _push(must_fix, critique_json.get("visual_problems", []), "medium", "Исправь визуальную проблему: ")
+    must_fix = []
+    optional = []
 
-    unique: list[dict] = []
-    seen: set[str] = set()
-    for item in must_fix:
-        key = item["issue"].strip().lower()
-        if key in seen:
-            continue
-        seen.add(key)
-        unique.append(item)
+    must_fix += _collect(critique_json.get("missing_requirements", []), "high", "Добавь или восстанови: ")
+    must_fix += _collect(critique_json.get("wrong_interpretations", []), "high", "Исправь неверную трактовку: ")
+    must_fix += _collect(critique_json.get("fixes", []), "high", "")
+    must_fix += _collect(critique_json.get("problems", []), "medium", "Исправь проблему: ")
+
+    optional += _collect(critique_json.get("extra_elements", []), "medium", "Добавь или уточни при уместности: ")
+    optional += _collect(critique_json.get("visual_problems", []), "medium", "Исправь визуальную проблему: ")
+
+    def _dedupe(items: list[dict]) -> list[dict]:
+        seen = set()
+        out = []
+        for item in items:
+            key = item["issue"].strip().lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append(item)
+        return out
+
+    must_fix = _dedupe(must_fix)[:6]
+    optional = _dedupe(optional)[:6]
 
     return {
-        "must_fix": unique[:8],
-        "optional": unique[8:12],
+        "must_fix": must_fix,
+        "optional": optional,
         "hard_constraints": [
             "Сохрани совместимость с внутренним JSON-форматом проекта",
             "Не добавляй новые enum-значения kind",
             "Сохрани title, layout_hint, renderer, style, если они корректны",
             "Все видимые label и title должны быть на русском",
-            "Для general-диаграмм допустимые kind: input, conv, block, output",
+            "Для general-диаграмм допустимые kind: input, conv, block, output"
         ],
     }
+
+
+def compact_diagram_for_verify(diagram: dict, max_nodes: int = 16, max_edges: int = 20) -> dict:
+    if not isinstance(diagram, dict):
+        return {"title": "", "renderer": "", "layout_hint": "", "nodes": [], "edges": []}
+
+    compact = {
+        "title": diagram.get("title", ""),
+        "renderer": diagram.get("renderer", ""),
+        "layout_hint": diagram.get("layout_hint", ""),
+        "nodes_count": len(diagram.get("nodes", []) or []),
+        "edges_count": len(diagram.get("edges", []) or []),
+        "nodes": [],
+        "edges": [],
+    }
+
+    for node in (diagram.get("nodes", []) or [])[:max_nodes]:
+        if isinstance(node, dict):
+            compact["nodes"].append({
+                "id": node.get("id", ""),
+                "label": node.get("label", ""),
+                "kind": node.get("kind", ""),
+            })
+
+    for edge in (diagram.get("edges", []) or [])[:max_edges]:
+        if isinstance(edge, dict):
+            compact["edges"].append({
+                "source": edge.get("source", ""),
+                "target": edge.get("target", ""),
+                "label": edge.get("label", ""),
+            })
+
+    return compact
 
 
 def verify_critique_application(
@@ -1247,33 +1290,79 @@ def verify_critique_application(
     patch_plan: dict,
     final_json: dict,
 ) -> dict:
+    draft_nodes = len(draft_json.get("nodes", []) or [])
+    final_nodes = len(final_json.get("nodes", []) or [])
+    draft_edges = len(draft_json.get("edges", []) or [])
+    final_edges = len(final_json.get("edges", []) or [])
+
+    if final_nodes == 0 or final_edges == 0:
+        total = len(patch_plan.get("must_fix", []) or [])
+        return {
+            "items": [
+                {
+                    "issue": item.get("issue", ""),
+                    "status": "ignored",
+                    "reason": "Итоговый JSON пустой или почти пустой; проверка провалена."
+                }
+                for item in (patch_plan.get("must_fix", []) or [])
+            ],
+            "summary": {
+                "fixed": 0,
+                "partial": 0,
+                "ignored": total
+            },
+            "invalid_final": True
+        }
+
+    if draft_nodes > 0 and final_nodes < max(1, draft_nodes // 3):
+        total = len(patch_plan.get("must_fix", []) or [])
+        return {
+            "items": [
+                {
+                    "issue": item.get("issue", ""),
+                    "status": "ignored",
+                    "reason": "Итоговая диаграмма потеряла слишком много узлов."
+                }
+                for item in (patch_plan.get("must_fix", []) or [])
+            ],
+            "summary": {
+                "fixed": 0,
+                "partial": 0,
+                "ignored": total
+            },
+            "invalid_final": True
+        }
+
+    final_compact = compact_diagram_for_verify(final_json, max_nodes=18, max_edges=24)
+    verify_patch_plan = {
+        "must_fix": (patch_plan.get("must_fix", []) or [])[:5]
+    }
+
     system_prompt = (
-        "Ты верификатор диаграмм. "
-        "Сравни patch plan и итоговый JSON. "
-        "Для каждого пункта поставь status: fixed, partial или ignored. "
-        "Верни только валидный JSON."
+        "Ты проверяешь, выполнены ли пункты must_fix по итоговому JSON диаграммы. "
+        "Оценивай только по final JSON. "
+        "Нельзя ссылаться на patch plan как на доказательство. "
+        "Если в final JSON нет явных признаков исправления, ставь ignored. "
+        "Верни только JSON."
     )
 
     user_prompt = f"""
 Запрос пользователя:
 {user_task}
 
-Исходный draft:
-{json.dumps(draft_json, ensure_ascii=False, indent=2)}
+Must-fix:
+{json.dumps(verify_patch_plan, ensure_ascii=False, indent=2)}
 
-Patch plan:
-{json.dumps(patch_plan, ensure_ascii=False, indent=2)}
-
-Итоговый JSON:
-{json.dumps(final_json, ensure_ascii=False, indent=2)}
+Final JSON:
+{json.dumps(final_compact, ensure_ascii=False, indent=2)}
 
 Верни JSON строго такого вида:
 {{
   "items": [
     {{
       "issue": "string",
-      "status": "fixed",
-      "reason": "string"
+      "status": "fixed|partial|ignored",
+      "reason": "строго укажи, какие node labels или edge связи в final это подтверждают"
     }}
   ],
   "summary": {{
@@ -1284,20 +1373,30 @@ Patch plan:
 }}
 """
 
-    raw_answer = ask_llm(
-        CRITIC_MODEL,
-        system_prompt,
-        user_prompt,
-        temperature=0.0,
-        response_format={"type": "json_object"},
-    )
-
     try:
+        raw_answer = ask_llm(
+            CRITIC_MODEL,
+            system_prompt,
+            user_prompt,
+            temperature=0.0,
+            response_format={"type": "json_object"},
+        )
         payload = extract_json(raw_answer)
     except Exception:
-        payload = {"items": [], "summary": {"fixed": 0, "partial": 0, "ignored": 0}}
+        total = len(verify_patch_plan.get("must_fix", []) or [])
+        payload = {
+            "items": [
+                {
+                    "issue": item.get("issue", ""),
+                    "status": "ignored",
+                    "reason": "LLM verify не смог надёжно проверить итоговый JSON."
+                }
+                for item in (verify_patch_plan.get("must_fix", []) or [])
+            ],
+            "summary": {"fixed": 0, "partial": 0, "ignored": total}
+        }
 
-    items = payload.get("items", [])
+    items = payload.get("items", []) or []
     fixed = sum(1 for x in items if str(x.get("status", "")).lower() == "fixed")
     partial = sum(1 for x in items if str(x.get("status", "")).lower() == "partial")
     ignored = sum(1 for x in items if str(x.get("status", "")).lower() == "ignored")
@@ -1307,6 +1406,7 @@ Patch plan:
         "partial": partial,
         "ignored": ignored,
     }
+    payload["invalid_final"] = False
     return payload
 
 def build_followup_patch_plan(patch_plan: dict, verify_json: dict) -> dict:
@@ -1399,6 +1499,13 @@ Patch plan:
 
     try:
         payload = extract_json(raw_answer)
+        meta = {
+            "addressed_critique": payload.get("addressed_critique", []),
+            "raw_payload": payload,
+        }
+        meta = {
+            "addressed_critique": payload.get("addressed_critique", []),
+        }
     except Exception as e:
         print(f"[WARN] improve parse failed: {e}")
         retry_system_prompt = (
@@ -1430,6 +1537,31 @@ Patch plan:
     improved = payload.get("diagram", payload)
     improved = clean_diagram_labels(improved)
     improved = restore_node_kinds(draft_json, improved)
+
+    if not isinstance(improved, dict):
+        print("[WARN] improved is not a dict, rollback to draft")
+        return draft_json, {"addressed_critique": [], "status": "rollback_non_dict"}
+
+    draft_nodes = len(draft_json.get("nodes", []) or [])
+    draft_edges = len(draft_json.get("edges", []) or [])
+    new_nodes = len(improved.get("nodes", []) or [])
+    new_edges = len(improved.get("edges", []) or [])
+
+    if draft_nodes > 0 and new_nodes == 0:
+        print("[WARN] improved lost all nodes, rollback to draft")
+        return draft_json, {"addressed_critique": payload.get("addressed_critique", []), "status": "rollback_empty_nodes"}
+
+    if draft_edges > 0 and new_edges == 0:
+        print("[WARN] improved lost all edges, rollback to draft")
+        return draft_json, {"addressed_critique": payload.get("addressed_critique", []), "status": "rollback_empty_edges"}
+
+    if draft_nodes >= 6 and new_nodes < max(2, draft_nodes // 3):
+        print("[WARN] improved lost too many nodes, rollback to draft")
+        return draft_json, {"addressed_critique": payload.get("addressed_critique", []), "status": "rollback_too_few_nodes"}
+
+    if draft_edges >= 6 and new_edges < max(2, draft_edges // 3):
+        print("[WARN] improved lost too many edges, rollback to draft")
+        return draft_json, {"addressed_critique": payload.get("addressed_critique", []), "status": "rollback_too_few_edges"}
 
     draft_renderer = str(draft_json.get("renderer", "")).lower()
     draft_layout = str(draft_json.get("layout_hint", "")).lower()
@@ -1855,10 +1987,20 @@ def main(
     print(json.dumps(final, ensure_ascii=False, indent=2))
     save_json_artifact("improve_meta.json", improve_meta, base_dir=run_dir)
 
+    if not final.get("nodes") or not final.get("edges"):
+        print("[WARN] final diagram is empty after improve; rollback to draft before verify")
+        final = draft
+
     verify = verify_critique_application(user_task, draft, patch_plan, final)
     save_json_artifact("verify.json", verify, base_dir=run_dir)
 
-    if verify.get("summary", {}).get("ignored", 0) > 0 or verify.get("summary", {}).get("partial", 0) > 0:
+    if (
+        not verify.get("invalid_final", False)
+        and (
+            verify.get("summary", {}).get("ignored", 0) > 0
+            or verify.get("summary", {}).get("partial", 0) > 0
+        )
+    ):
         print("\n=== ШАГ 3.5: Дополнительный improve-pass по проигнорированным пунктам ===")
         followup_patch_plan = build_followup_patch_plan(patch_plan, verify)
         save_json_artifact("followup_patch_plan.json", followup_patch_plan, base_dir=run_dir)

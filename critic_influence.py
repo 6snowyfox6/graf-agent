@@ -299,7 +299,26 @@ def compute_critic_listening_metrics(
     final: dict[str, Any],
     verify: dict[str, Any] | None = None,
 ) -> dict[str, float]:
-    if verify and verify.get("items"):
+    draft_nodes = len(draft.get("nodes", []) or [])
+    draft_edges = len(draft.get("edges", []) or [])
+    final_nodes = len(final.get("nodes", []) or [])
+    final_edges = len(final.get("edges", []) or [])
+
+    if (draft_nodes > 0 and final_nodes == 0) or (draft_edges > 0 and final_edges == 0):
+        return {
+            "fixes_coverage": 0.0,
+            "problems_addressed_rate": 0.0,
+            "critic_ignored_rate": 1.0,
+            "contradiction_rate": 1.0,
+            "critic_alignment_score": 0.0,
+            "critic_precision_proxy": 0.0,
+            "critic_recall_proxy": 0.0,
+            "critic_listening_f1": 0.0,
+            "critic_listening_confidence": 1.0,
+            "verify_based": 0.0,
+            "invalid_final": 1.0,
+        }
+    if verify and verify.get("items") and not verify.get("invalid_final", False):
         items = verify.get("items", [])
         total = len(items)
         fixed = sum(1 for x in items if str(x.get("status", "")).lower() == "fixed")
