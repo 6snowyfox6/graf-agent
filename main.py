@@ -1080,7 +1080,7 @@ def critique_diagram(user_task: str, draft_json: dict, references: list[dict] | 
     # Keep critic input compact to fit smaller context windows (e.g. 2048).
     def _compact_diagram_for_critique(diagram: dict) -> dict:
         nodes = []
-        for node in diagram.get("nodes", [])[:24]:
+        for node in diagram.get("nodes", [])[:48]:
             if not isinstance(node, dict):
                 continue
             nodes.append({
@@ -1090,7 +1090,7 @@ def critique_diagram(user_task: str, draft_json: dict, references: list[dict] | 
             })
 
         edges = []
-        for edge in diagram.get("edges", [])[:36]:
+        for edge in diagram.get("edges", [])[:72]:
             if not isinstance(edge, dict):
                 continue
             edges.append({
@@ -1199,87 +1199,256 @@ def critique_diagram(user_task: str, draft_json: dict, references: list[dict] | 
 def clean_diagram_labels(diagram: dict) -> dict:
     return pipeline_clean_diagram_labels(diagram)
 
+def build_patch_plan(critique_json: dict) -> dict:
+    def _push(dst: list[dict], items: list, severity: str, prefix: str) -> None:
+        for item in items or []:
+            text = str(item or "").strip()
+            if not text:
+                continue
+            dst.append({
+                "issue": text,
+                "instruction": f"{prefix}{text}".strip(),
+                "severity": severity,
+            })
+
+    must_fix: list[dict] = []
+    _push(must_fix, critique_json.get("missing_requirements", []), "high", "Добавь или восстанови: ")
+    _push(must_fix, critique_json.get("wrong_interpretations", []), "high", "Исправь неверную трактовку: ")
+    _push(must_fix, critique_json.get("extra_elements", []), "high", "Удали лишнее или замени на корректное: ")
+    _push(must_fix, critique_json.get("fixes", []), "high", "")
+    _push(must_fix, critique_json.get("problems", []), "medium", "Исправь проблему: ")
+    _push(must_fix, critique_json.get("visual_problems", []), "medium", "Исправь визуальную проблему: ")
+
+    unique: list[dict] = []
+    seen: set[str] = set()
+    for item in must_fix:
+        key = item["issue"].strip().lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(item)
+
+    return {
+        "must_fix": unique[:8],
+        "optional": unique[8:12],
+        "hard_constraints": [
+            "Сохрани совместимость с внутренним JSON-форматом проекта",
+            "Не добавляй новые enum-значения kind",
+            "Сохрани title, layout_hint, renderer, style, если они корректны",
+            "Все видимые label и title должны быть на русском",
+            "Для general-диаграмм допустимые kind: input, conv, block, output",
+        ],
+    }
+
+
+def verify_critique_application(
+    user_task: str,
+    draft_json: dict,
+    patch_plan: dict,
+    final_json: dict,
+) -> dict:
+    system_prompt = (
+        "Ты верификатор диаграмм. "
+        "Сравни patch plan и итоговый JSON. "
+        "Для каждого пункта поставь status: fixed, partial или ignored. "
+        "Верни только валидный JSON."
+    )
+
+    user_prompt = f"""
+Запрос пользователя:
+{user_task}
+
+Исходный draft:
+{json.dumps(draft_json, ensure_ascii=False, indent=2)}
+
+Patch plan:
+{json.dumps(patch_plan, ensure_ascii=False, indent=2)}
+
+Итоговый JSON:
+{json.dumps(final_json, ensure_ascii=False, indent=2)}
+
+Верни JSON строго такого вида:
+{{
+  "items": [
+    {{
+      "issue": "string",
+      "status": "fixed",
+      "reason": "string"
+    }}
+  ],
+  "summary": {{
+    "fixed": 0,
+    "partial": 0,
+    "ignored": 0
+  }}
+}}
+"""
+
+    raw_answer = ask_llm(
+        CRITIC_MODEL,
+        system_prompt,
+        user_prompt,
+        temperature=0.0,
+        response_format={"type": "json_object"},
+    )
+
+    try:
+        payload = extract_json(raw_answer)
+    except Exception:
+        payload = {"items": [], "summary": {"fixed": 0, "partial": 0, "ignored": 0}}
+
+    items = payload.get("items", [])
+    fixed = sum(1 for x in items if str(x.get("status", "")).lower() == "fixed")
+    partial = sum(1 for x in items if str(x.get("status", "")).lower() == "partial")
+    ignored = sum(1 for x in items if str(x.get("status", "")).lower() == "ignored")
+
+    payload["summary"] = {
+        "fixed": fixed,
+        "partial": partial,
+        "ignored": ignored,
+    }
+    return payload
+
+def build_followup_patch_plan(patch_plan: dict, verify_json: dict) -> dict:
+    unresolved = []
+    unresolved_map = {
+        str(item.get("issue", "")).strip().lower()
+        for item in verify_json.get("items", [])
+        if str(item.get("status", "")).lower() in {"partial", "ignored"}
+    }
+
+    for item in patch_plan.get("must_fix", []):
+        issue = str(item.get("issue", "")).strip().lower()
+        if issue in unresolved_map:
+            unresolved.append(item)
+
+    return {
+        "must_fix": unresolved,
+        "optional": [],
+        "hard_constraints": patch_plan.get("hard_constraints", []),
+    }
 
 def improve_diagram(
     user_task: str,
     draft_json: dict,
     critique_json: dict,
-    references: list[dict] | None = None
-) -> dict:
+    references: list[dict] | None = None,
+    patch_plan: dict | None = None,
+) -> tuple[dict, dict]:
     references = normalize_references(references or [])
     refs_text = format_references_for_prompt(references)
+    patch_plan = patch_plan or build_patch_plan(critique_json)
 
     system_prompt = (
-        "Ты исправляешь JSON диаграммы. "
+        "Ты исправляешь JSON диаграммы по patch plan. "
+        "Ты не споришь с patch plan и не игнорируешь пункты must_fix. "
+        "Сначала исправь все must_fix, потом optional. "
         "Главное правило: сохраняй совместимость с внутренним форматом проекта. "
-        "Нельзя придумывать новые поля и новые значения перечислений. "
+        "Нельзя придумывать новые поля внутри diagram и новые значения перечислений. "
         "Для general-диаграмм допустимые значения nodes[].kind: input, conv, block, output. "
-        "Нельзя заменять их на actor, ui, service, database и другие значения. "
-        "Если хочешь отразить акторов, UI, сервисы и базы, делай это через существующие допустимые kind: "
+        "Если хочешь отразить actor/ui/service/database, делай это через существующие kind: "
         "actor -> input, ui -> conv, service -> block, database -> output. "
-        "Сохраняй существующие корректные поля: title, layout_hint, renderer, style, nodes[].kind. "
-        "Не удаляй поля, если они уже есть и корректны. "
-        "Исправляй только то, что действительно нужно исправить. "
-        "Верни только валидный JSON."
         "Все видимые подписи и title должны быть только на русском языке. "
-        "Служебные kind могут оставаться внутренними: input, conv, block, output. "
-        "Но label нельзя писать как input, output, block, conv, UI, API, DB. "
+        "Верни только валидный JSON."
     )
 
     user_prompt = f"""
-        Запрос пользователя:
-        {user_task}
+Запрос пользователя:
+{user_task}
 
-        Черновой JSON:
-        {json.dumps(draft_json, ensure_ascii=False, indent=2)}
+Референсы:
+{refs_text[:1200] if refs_text else ""}
 
-        Замечания критика:
-        {json.dumps(critique_json, ensure_ascii=False, indent=2)}
+Черновой JSON:
+{json.dumps(draft_json, ensure_ascii=False, indent=2)}
 
-        Важно:
-        - сохрани title, layout_hint, renderer, style, если они уже есть;
-        - все видимые label и title должны быть только на русском языке;
-        - служебные kind оставь внутренними, но не показывай их в label;
-        - не удаляй существующие корректные поля;
-        - для general-диаграмм допустимые kind только: input, conv, block, output;
-        - не используй actor, ui, service, database;
-        - если критик пишет про actors/services/databases, отрази это через существующие kind:
-        input = actors
-        conv = UI
-        block = services
-        output = databases
+Замечания критика:
+{json.dumps(critique_json, ensure_ascii=False, indent=2)}
 
-        Верни только исправленный JSON.
-    """
-    raw_answer = ask_llm(GENERATOR_MODEL, system_prompt, user_prompt)
+Patch plan:
+{json.dumps(patch_plan, ensure_ascii=False, indent=2)}
+
+Верни JSON строго такого вида:
+{{
+  "diagram": {{
+    "title": "string",
+    "layout_hint": "string",
+    "renderer": "string"
+  }},
+  "addressed_critique": [
+    {{
+      "item": "string",
+      "status": "fixed",
+      "reason": "string"
+    }}
+  ]
+}}
+"""
+
+    raw_answer = ask_llm(
+        GENERATOR_MODEL,
+        system_prompt,
+        user_prompt,
+        temperature=0.0,
+        response_format={"type": "json_object"},
+    )
 
     print("\n=== RAW ANSWER FROM IMPROVER ===")
     print(raw_answer)
     print("=== END RAW ANSWER FROM IMPROVER ===\n")
 
     try:
-        improved = extract_json(raw_answer)
-        improved = clean_diagram_labels(improved)
-        improved = restore_node_kinds(draft_json, improved)
-        draft_renderer = str(draft_json.get("renderer", "")).lower()
-        draft_layout = str(draft_json.get("layout_hint", "")).lower()
-        improved.setdefault("renderer", draft_json.get("renderer", "general"))
-        improved.setdefault("layout_hint", draft_json.get("layout_hint", "general"))
+        payload = extract_json(raw_answer)
+    except Exception as e:
+        print(f"[WARN] improve parse failed: {e}")
+        retry_system_prompt = (
+            system_prompt
+            + " Верни только один валидный JSON-объект без markdown, "
+            + "без пояснений, без текста до и после JSON."
+        )
+        retry_user_prompt = (
+            user_prompt
+            + "\n\nПовтори ответ СТРОГО как валидный JSON-объект, ничего кроме JSON."
+        )
+        try:
+            retry_answer = ask_llm(
+                GENERATOR_MODEL,
+                retry_system_prompt,
+                retry_user_prompt,
+                temperature=0.0,
+                response_format={"type": "json_object"},
+            )
+            payload = extract_json(retry_answer)
+        except Exception:
+            print("Ошибка парсинга improve-ответа после retry. Возвращаю draft_json.")
+            return draft_json, {"addressed_critique": [], "status": "parse_failed"}
 
-        is_general = draft_renderer == "general" or draft_layout == "general"
-        if is_general:
-            improved = normalize_general_diagram(improved, fallback=draft_json)
-        else:
-            improved["renderer"] = draft_json.get(
-                "renderer", improved.get("renderer", "plotneuralnet")
-            )
-            improved["layout_hint"] = draft_json.get(
-                "layout_hint", improved.get("layout_hint", "model_architecture")
-            )
-        return improved
-    except Exception:
-        print("Ошибка парсинга improve-ответа. Возвращаю draft_json.")
-        return draft_json
+    meta = {
+        "addressed_critique": payload.get("addressed_critique", []),
+    }
+
+    improved = payload.get("diagram", payload)
+    improved = clean_diagram_labels(improved)
+    improved = restore_node_kinds(draft_json, improved)
+
+    draft_renderer = str(draft_json.get("renderer", "")).lower()
+    draft_layout = str(draft_json.get("layout_hint", "")).lower()
+
+    improved.setdefault("renderer", draft_json.get("renderer", "general"))
+    improved.setdefault("layout_hint", draft_json.get("layout_hint", "general"))
+
+    is_general = draft_renderer == "general" or draft_layout == "general"
+    if is_general:
+        improved = normalize_general_diagram(improved, fallback=draft_json)
+    else:
+        improved["renderer"] = draft_json.get(
+            "renderer", improved.get("renderer", "plotneuralnet")
+        )
+        improved["layout_hint"] = draft_json.get(
+            "layout_hint", improved.get("layout_hint", "model_architecture")
+        )
+
+    return improved, meta
 
 
 def image_to_data_url(image_path: str) -> str:
@@ -1672,9 +1841,49 @@ def main(
     save_json_artifact("critique.json", critique, base_dir=run_dir)
     print(json.dumps(critique, ensure_ascii=False, indent=2))
 
+    patch_plan = build_patch_plan(critique)
+    save_json_artifact("patch_plan.json", patch_plan, base_dir=run_dir)
+
     print("\n=== ШАГ 3: Исправление ===")
-    final = improve_diagram(user_task, draft, critique)
+    final, improve_meta = improve_diagram(
+        user_task,
+        draft,
+        critique,
+        references,
+        patch_plan=patch_plan,
+    )
     print(json.dumps(final, ensure_ascii=False, indent=2))
+    save_json_artifact("improve_meta.json", improve_meta, base_dir=run_dir)
+
+    verify = verify_critique_application(user_task, draft, patch_plan, final)
+    save_json_artifact("verify.json", verify, base_dir=run_dir)
+
+    if verify.get("summary", {}).get("ignored", 0) > 0 or verify.get("summary", {}).get("partial", 0) > 0:
+        print("\n=== ШАГ 3.5: Дополнительный improve-pass по проигнорированным пунктам ===")
+        followup_patch_plan = build_followup_patch_plan(patch_plan, verify)
+        save_json_artifact("followup_patch_plan.json", followup_patch_plan, base_dir=run_dir)
+
+        if followup_patch_plan.get("must_fix"):
+            final_retry, improve_meta_retry = improve_diagram(
+                user_task,
+                final,
+                critique,
+                references,
+                patch_plan=followup_patch_plan,
+            )
+            verify_retry = verify_critique_application(user_task, draft, patch_plan, final_retry)
+
+            save_json_artifact("improve_meta_retry.json", improve_meta_retry, base_dir=run_dir)
+            save_json_artifact("verify_retry.json", verify_retry, base_dir=run_dir)
+
+            old_fixed = verify.get("summary", {}).get("fixed", 0)
+            new_fixed = verify_retry.get("summary", {}).get("fixed", 0)
+            old_ignored = verify.get("summary", {}).get("ignored", 0)
+            new_ignored = verify_retry.get("summary", {}).get("ignored", 0)
+
+            if (new_fixed > old_fixed) or (new_ignored < old_ignored):
+                final = final_retry
+                verify = verify_retry
 
     final_clean = clean_diagram_labels(final)
     save_json_artifact("draft.json", draft, base_dir=run_dir)
@@ -1694,7 +1903,13 @@ def main(
             "fixes": [],
         }
         try:
-            counterfactual_final = improve_diagram(user_task, draft, neutral_critique)
+            counterfactual_final, _ = improve_diagram(
+                user_task,
+                draft,
+                neutral_critique,
+                references,
+                patch_plan=build_patch_plan(neutral_critique),
+            )
             counterfactual_clean = clean_diagram_labels(counterfactual_final)
             save_json_artifact(
                 "counterfactual_final_no_critic.json",
@@ -1704,7 +1919,7 @@ def main(
 
             factual_change = compute_change_metrics(draft, final_clean)
             counter_change = compute_change_metrics(draft, counterfactual_clean)
-            factual_listen = compute_critic_listening_metrics(draft, critique, final_clean)
+            factual_listen = compute_critic_listening_metrics(draft, critique, final_clean, verify=verify)
             counter_listen = compute_critic_listening_metrics(draft, critique, counterfactual_clean)
 
             ab_report = {
@@ -1763,6 +1978,7 @@ def main(
                 draft=draft,
                 critique=critique,
                 final=final_clean,
+                verify=verify,
             )
             print(
                 f"[critic-influence] status={influence_result.status}, "

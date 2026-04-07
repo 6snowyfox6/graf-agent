@@ -47,7 +47,7 @@ exec "$PYTHON_BIN" -m llama_cpp.server \
     --host 127.0.0.1 \
     --port 8001 \
     --n_gpu_layers 10 \
-    --n_ctx 2048 \
+    --n_ctx 4096 \
     --n_batch 64 \
     --n_ubatch 64 \
     --chat_format chatml

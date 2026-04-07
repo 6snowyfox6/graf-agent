@@ -297,7 +297,46 @@ def compute_critic_listening_metrics(
     draft: dict[str, Any],
     critique: dict[str, Any],
     final: dict[str, Any],
+    verify: dict[str, Any] | None = None,
 ) -> dict[str, float]:
+    if verify and verify.get("items"):
+        items = verify.get("items", [])
+        total = len(items)
+        fixed = sum(1 for x in items if str(x.get("status", "")).lower() == "fixed")
+        partial = sum(1 for x in items if str(x.get("status", "")).lower() == "partial")
+        ignored = sum(1 for x in items if str(x.get("status", "")).lower() == "ignored")
+
+        fixes_coverage = float((fixed + 0.5 * partial) / max(1, total))
+        problems_addressed = fixes_coverage
+        contradiction_rate = float(ignored / max(1, total))
+        ignored_rate = float(ignored / max(1, total))
+        precision_proxy = fixes_coverage
+        recall_proxy = fixes_coverage
+        listening_f1 = fixes_coverage
+        listening_confidence = min(1.0, 0.4 + 0.6 * (total / 8.0))
+        alignment_score = max(
+            0.0,
+            min(
+                1.0,
+                0.75 * (fixed / max(1, total))
+                + 0.15 * (partial / max(1, total))
+                + 0.10 * (1.0 - contradiction_rate),
+            ),
+        )
+
+        return {
+            "fixes_coverage": float(fixes_coverage),
+            "problems_addressed_rate": float(problems_addressed),
+            "critic_ignored_rate": float(ignored_rate),
+            "contradiction_rate": float(contradiction_rate),
+            "critic_alignment_score": float(alignment_score),
+            "critic_precision_proxy": float(precision_proxy),
+            "critic_recall_proxy": float(recall_proxy),
+            "critic_listening_f1": float(listening_f1),
+            "critic_listening_confidence": float(listening_confidence),
+            "verify_based": 1.0,
+        }
+
     change_corpus = _collect_change_corpus(draft, final)
     change_tokens = _tokenize(change_corpus)
 
@@ -321,7 +360,6 @@ def compute_critic_listening_metrics(
     fixes_coverage = _match_rate(fixes)
     problems_addressed = _match_rate(problems + missing + wrong)
 
-    # If critique said "extra elements", contradiction means these tokens still appear in final labels.
     final_text = " ".join(str(n.get("label", "")) for n in final.get("nodes", []) if isinstance(n, dict))
     final_tokens = _tokenize(final_text)
     if extras:
@@ -332,7 +370,6 @@ def compute_critic_listening_metrics(
 
     ignored_rate = max(0.0, 1.0 - fixes_coverage)
 
-    # How focused changes are on critique vocabulary (proxy for "listening precision").
     critique_tokens = _tokenize(" ".join(fixes + problems + missing + wrong + extras))
     if change_tokens:
         precision_proxy = float(len(change_tokens & critique_tokens) / max(1, len(change_tokens)))
@@ -368,8 +405,7 @@ def compute_critic_listening_metrics(
         "critic_recall_proxy": float(recall_proxy),
         "critic_listening_f1": float(listening_f1),
         "critic_listening_confidence": float(listening_confidence),
-        "actionable_items_count": float(len(actionable_items)),
-        "actionable_items_matched_count": float(matched_actionable),
+        "verify_based": 0.0,
     }
 
 
@@ -946,13 +982,14 @@ class CriticInfluenceAnalyzer:
         draft: dict[str, Any],
         critique: dict[str, Any],
         final: dict[str, Any],
+        verify: dict[str, Any] | None = None,
     ) -> InfluenceResult:
         run_path = Path(run_dir)
         run_path.mkdir(parents=True, exist_ok=True)
 
         features = extract_critique_features(critique)
         targets = compute_change_metrics(draft, final)
-        listening = compute_critic_listening_metrics(draft, critique, final)
+        listening = compute_critic_listening_metrics(draft, critique, final, verify=verify)
         traceability = compute_critic_traceability(draft, critique, final)
         targets = {
             **targets,
@@ -991,6 +1028,7 @@ class CriticInfluenceAnalyzer:
             "features": features,
             "targets": targets,
             "critic_listening": listening,
+            "critic_verify": verify or {},
             "critic_traceability": traceability,
             "predicted_change_score": explain_payload.get("predicted_change_score"),
             "local_contributions": explain_payload.get("local_contributions", {}),
