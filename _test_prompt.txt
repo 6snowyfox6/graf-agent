@@ -1,6 +1,50 @@
-Создай общую архитектурную диаграмму университетской информационной системы.
-Это именно general architecture diagram, не pipeline, не flowchart и не модель нейросети.
-Нужно показать: Студент, Преподаватель, Деканат, Администратор, Личный кабинет, Веб-портал, API, Сервис расписания, Сервис дисциплин, Сервис оценок, Сервис уведомлений, Сервис учётных записей, База студентов, База дисциплин, База успеваемости.
-Сделай диаграмму логически слоистой и удобной для академического документа.
-Не используй длинные текстовые блоки.
-Сохрани чистую компоновку с минимальным числом пересечений стрелок.
+Нарисуй 3D архитектурную диаграмму Canonical U-Net для сегментации медицинских изображений в стиле PlotNeuralNet.
+
+Жесткие требования:
+- renderer: plotneuralnet
+- layout_hint: model_architecture
+- layout: u_shape
+- title: "Canonical U-Net"
+
+Обязательные блоки энкодера (слева, сверху вниз):
+1) Input Image (572x572x1) [kind=input]
+2) Enc1 (Conv 64 x2) [kind=conv]
+3) Pool1 [kind=pool]
+4) Enc2 (Conv 128 x2) [kind=conv]
+5) Pool2 [kind=pool]
+6) Enc3 (Conv 256 x2) [kind=conv]
+7) Pool3 [kind=pool]
+8) Enc4 (Conv 512 x2) [kind=conv]
+9) Pool4 [kind=pool]
+
+Bottleneck:
+10) Bottleneck (Conv 1024 x2) [kind=block]
+
+Обязательные блоки декодера (справа, снизу вверх):
+11) Up4 (UpConv 512) [kind=conv]
+12) Concat4 (skip Enc4 + Up4) [kind=concat]
+13) Dec4 (Conv 512 x2) [kind=conv]
+14) Up3 (UpConv 256) [kind=conv]
+15) Concat3 (skip Enc3 + Up3) [kind=concat]
+16) Dec3 (Conv 256 x2) [kind=conv]
+17) Up2 (UpConv 128) [kind=conv]
+18) Concat2 (skip Enc2 + Up2) [kind=concat]
+19) Dec2 (Conv 128 x2) [kind=conv]
+20) Up1 (UpConv 64) [kind=conv]
+21) Concat1 (skip Enc1 + Up1) [kind=concat]
+22) Dec1 (Conv 64 x2) [kind=conv]
+23) Segmentation Map (572x572x1) [kind=output]
+
+Обязательные связи:
+- Прямая цепочка через все уровни энкодер -> bottleneck -> декодер -> output.
+- Skip connections: Enc4->Concat4, Enc3->Concat3, Enc2->Concat2, Enc1->Concat1.
+- Concat узлы должны получать два входа: от up-блока и от соответствующего encoder-блока.
+
+Визуальные требования:
+- U-образная геометрия без наложения текста на блоки.
+- Skip-стрелки аккуратные, не пересекают подписи.
+- Короткие читаемые подписи.
+- Декодер симметричен энкодеру по уровням каналов 64/128/256/512.
+- Никаких 2D flowchart-элементов, только 3D PlotNeuralNet блоки.
+
+Верни только валидный JSON диаграммы без markdown и пояснений.

@@ -288,10 +288,14 @@ def run_pipeline_stream(
                 log_text=log_text,
                 run_dir=run_dir,
             )
-            final = improve_diagram(prompt, draft, critique, references)
+            final, improve_meta = improve_diagram(prompt, draft, critique, references)
             final_clean = clean_diagram_labels(final)
             save_json_artifact("final.json", final_clean, base_dir=run_dir)
-            log_text = _append_log(log_lines, "Исправленная диаграмма сохранена.")
+            improve_status = str(improve_meta.get("status", "ok"))
+            log_text = _append_log(
+                log_lines,
+                f"Исправленная диаграмма сохранена (improve status: {improve_status}).",
+            )
             yield _make_event(
                 stage="improve",
                 progress=0.80,

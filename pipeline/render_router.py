@@ -21,12 +21,19 @@ def _normalize_output_root(output_name: str, output_dir: str | Path) -> Path:
 
 
 def render_diagram(
-    diagram: dict[str, Any],
+    diagram: dict[str, Any] | tuple[Any, ...],
     output_name: str,
     output_dir: str | Path,
     render_general: GeneralRendererFn,
     render_pipeline: PipelineRendererFn,
 ) -> Any:
+    # Defensive compatibility: some call sites may accidentally pass
+    # (diagram, meta) tuples after improve stage refactors.
+    if isinstance(diagram, tuple):
+        diagram = diagram[0] if diagram else {}
+    if not isinstance(diagram, dict):
+        raise TypeError(f"render_diagram expected dict, got {type(diagram).__name__}")
+
     renderer = diagram.get("renderer", "")
     layout_hint = diagram.get("layout_hint", "")
     output_root = _normalize_output_root(output_name, output_dir)
@@ -47,4 +54,3 @@ def render_diagram(
         return render_pipeline(diagram, output_name, output_dir)
 
     return render_general(diagram, output_name, output_dir)
-

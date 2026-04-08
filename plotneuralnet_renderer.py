@@ -98,7 +98,9 @@ class PlotNeuralNetRenderer:
             self._render_canonical_yolo_via_python(diagram, safe_name, work_dir, tex_path)
         elif python_backend_enabled:
             try:
-                if self._looks_like_yolo(diagram):
+                if self._looks_like_unet(diagram):
+                    self._render_canonical_unet_via_python(diagram, safe_name, work_dir, tex_path)
+                elif self._looks_like_yolo(diagram):
                     self._render_canonical_yolo_via_python(diagram, safe_name, work_dir, tex_path)
                 elif self._looks_like_resnet(diagram):
                     self._render_canonical_resnet_via_python(diagram, safe_name, work_dir, tex_path)
@@ -238,32 +240,114 @@ class PlotNeuralNetRenderer:
         work_dir: Path,
         tex_path: Path,
     ) -> None:
-        plot_root = self.plotneuralnet_root
-        py_script_path = work_dir / f"{safe_name}_gen.py"
-        stage_count = self._infer_unet_stage_count(diagram)
+        # Canonical U-Net template in PlotNeuralNet examples is 4-level U-shape.
+        stage_count = 4
+        unet_spec = self._extract_unet_spec(diagram, stage_count)
+        tex_content = self._build_unet_ushape_tex(diagram, unet_spec)
+        tex_path.write_text(tex_content, encoding="utf-8")
 
-        script = self._build_unet_python_script(
-            output_tex_name=tex_path.name,
-            plot_root=plot_root,
-            stage_count=stage_count,
-        )
-        py_script_path.write_text(script, encoding="utf-8")
+    def _build_unet_ushape_tex(self, diagram: dict[str, Any], unet_spec: dict[str, Any]) -> str:
+        template_path = self.plotneuralnet_root / "examples" / "Unet_Ushape" / "Unet_ushape.tex"
+        if not template_path.exists():
+            raise PlotNeuralNetRenderError(f"Не найден шаблон U-shape: {template_path}")
 
-        result = subprocess.run(
-            ["python3", py_script_path.name],
-            cwd=work_dir,
-            capture_output=True,
-            text=True,
+        tex = template_path.read_text(encoding="utf-8")
+        layers_dir = self.layers_dir.as_posix()
+        tex = tex.replace(r"\subimport{../../layers/}{init}", rf"\subimport{{{layers_dir}/}}{{init}}")
+
+        channels = list(unet_spec.get("channels", [64, 128, 256, 512]))
+        if len(channels) < 4:
+            channels.extend([channels[-1]] * (4 - len(channels)))
+        channels = channels[:4]
+        bottleneck = int(unet_spec.get("bottleneck_channels", channels[-1] * 2))
+        output_caption = self._escape_latex(str(unet_spec.get("output_caption", "Segmentation Map"))).replace(",", " ")
+        title = self._escape_latex(str(diagram.get("title", "") or "")).strip()
+
+        def _replace_xlabel(block: str, left: str, right: str) -> None:
+            nonlocal tex
+            pattern = rf'(name={re.escape(block)},%[\s\S]*?xlabel=\{{\{{")\d+","[^"]+("\}}\}})'
+            tex = re.sub(pattern, rf'\g<1>{left}","{right}\g<2>', tex, count=1)
+
+        _replace_xlabel("cr1", str(channels[0]), str(channels[0]))
+        _replace_xlabel("cr2", str(channels[1]), str(channels[1]))
+        _replace_xlabel("cr3", str(channels[2]), str(channels[2]))
+        _replace_xlabel("cr4", str(channels[3]), str(channels[3]))
+        _replace_xlabel("cr5", str(bottleneck), str(bottleneck))
+
+        _replace_xlabel("ucr4", str(channels[3]), "dummy")
+        _replace_xlabel("ucr4a", str(channels[3]), str(channels[3]))
+        _replace_xlabel("ucr3", str(channels[2]), "dummy")
+        _replace_xlabel("ucr3a", str(channels[2]), str(channels[2]))
+        _replace_xlabel("ucr2", str(channels[1]), "dummy")
+        _replace_xlabel("ucr2a", str(channels[1]), str(channels[1]))
+        _replace_xlabel("ucr1", str(channels[0]), "dummy")
+        _replace_xlabel("ucr1a", str(channels[0]), str(channels[0]))
+
+        tex = re.sub(
+            r"(name=out,caption=)[^,]+(,%)",
+            rf"\g<1>{output_caption}\g<2>",
+            tex,
+            count=1,
         )
-        if result.returncode != 0:
-            raise PlotNeuralNetRenderError(
-                "Ошибка генерации TeX через PlotNeuralNet python backend.\n"
-                f"STDOUT:\n{result.stdout}\n\nSTDERR:\n{result.stderr}"
+
+        if title:
+            title_line = (
+                r"\node[above=1.0cm, align=center] at (current bounding box.north)"
+                + rf" {{\Large\bfseries\sffamily {title}}};"
             )
-        if not tex_path.exists():
-            raise PlotNeuralNetRenderError(
-                f"Python backend не сгенерировал TeX: {tex_path}"
+            tex = tex.replace(
+                r"\end{tikzpicture}",
+                title_line + "\n" + r"\end{tikzpicture}",
+                1,
             )
+
+        return tex
+
+    def _extract_unet_spec(self, diagram: dict[str, Any], stage_count: int) -> dict[str, Any]:
+        default_channels = [64, 128, 256, 512, 768, 1024][:stage_count]
+        stage_channels: dict[int, int] = {}
+        bottleneck_channels: int | None = None
+        output_caption = "Segmentation Map"
+
+        for node in diagram.get("nodes", []):
+            if not isinstance(node, dict):
+                continue
+            node_id = str(node.get("id", ""))
+            label = str(node.get("label", ""))
+            text = f"{node_id} {label}"
+            text_low = text.lower()
+
+            enc_match = re.search(r"enc[\s_-]?(\d+)", text_low)
+            if enc_match:
+                idx = int(enc_match.group(1))
+                nums = [int(x) for x in re.findall(r"\d{2,5}", text)]
+                if nums:
+                    stage_channels[idx] = nums[0]
+                continue
+
+            if "bottleneck" in text_low:
+                nums = [int(x) for x in re.findall(r"\d{2,5}", text)]
+                if nums:
+                    bottleneck_channels = nums[0]
+                continue
+
+            if str(node.get("kind", "")).lower() == "output" and label.strip():
+                output_caption = label.strip()
+
+        channels: list[int] = []
+        for i in range(1, stage_count + 1):
+            ch = stage_channels.get(i, default_channels[i - 1])
+            channels.append(max(8, min(4096, int(ch))))
+
+        if bottleneck_channels is None:
+            bottleneck_channels = channels[-1] * 2
+        bottleneck_channels = max(8, min(8192, int(bottleneck_channels)))
+
+        return {
+            "channels": channels,
+            "bottleneck_channels": bottleneck_channels,
+            "output_caption": output_caption,
+        }
 
     def _looks_like_resnet(self, diagram: dict[str, Any]) -> bool:
         title = str(diagram.get("title", "")).lower()
@@ -274,6 +358,18 @@ class PlotNeuralNetRenderer:
             if "resnet" in text:
                 return True
         return False
+
+    def _looks_like_unet(self, diagram: dict[str, Any]) -> bool:
+        title = str(diagram.get("title", "")).lower()
+        if any(token in title for token in ("u-net", "unet", "юнет")):
+            return True
+        text_parts: list[str] = []
+        for node in diagram.get("nodes", []):
+            if isinstance(node, dict):
+                text_parts.append(str(node.get("id", "")).lower())
+                text_parts.append(str(node.get("label", "")).lower())
+        joined = " ".join(text_parts)
+        return any(token in joined for token in ("u-net", "unet", "юнет", "bottleneck", "enc1", "dec1"))
 
     def _looks_like_yolo(self, diagram: dict[str, Any]) -> bool:
         title = str(diagram.get("title", "")).lower()
@@ -652,74 +748,55 @@ class PlotNeuralNetRenderer:
         output_tex_name: str,
         plot_root: Path,
         stage_count: int,
+        unet_spec: dict[str, Any] | None = None,
     ) -> str:
-        # Stage templates are aligned with PlotNeuralNet examples and scaled
-        # to keep article-like proportions for 2..6 levels.
-        channels = [64, 128, 256, 512, 768, 1024][:stage_count]
-        spatial = [40, 32, 25, 16, 12, 9][:stage_count]
-        widths = [2.5, 3.5, 4.5, 6.0, 6.8, 7.6][:stage_count]
-        bottleneck_size = max(8, int(spatial[-1] * 0.5))
-        bottleneck_width = min(9.0, widths[-1] + 2.0)
-        bottleneck_filters = channels[-1] * 2
+        unet_spec = unet_spec or {}
+        channels = list(unet_spec.get("channels", [64, 128, 256, 512]))
+        if len(channels) < 4:
+            channels.extend([channels[-1]] * (4 - len(channels)))
+        channels = channels[:4]
+        bottleneck_filters = int(unet_spec.get("bottleneck_channels", channels[-1] * 2))
+        output_caption = self._escape_latex(str(unet_spec.get("output_caption", "Segmentation Map")))
 
-        enc_lines: list[str] = []
-        dec_lines: list[str] = []
-        skip_lines: list[str] = []
+        # Match PlotNeuralNet reference U-shape geometry (pyexamples/unet.py).
+        sizes_hwd = [
+            (40, 40, 2.0),   # Enc1
+            (32, 32, 3.5),   # Enc2
+            (25, 25, 4.5),   # Enc3
+            (16, 16, 5.5),   # Enc4
+        ]
+        pooled_hw = [32, 25, 16, 8]
 
-        enc_lines.append(
+        body = "\n".join([
             "    to_ConvConvRelu(name='ccr_b1', s_filer=500, n_filer=(%d,%d), offset='(0,0,0)', to='(0,0,0)', width=(%.1f,%.1f), height=%d, depth=%d),"
-            % (channels[0], channels[0], widths[0], widths[0], spatial[0], spatial[0])
-        )
-        enc_lines.append(
-            "    to_Pool(name='pool_b1', offset='(0,0,0)', to='(ccr_b1-east)', width=1, height=%d, depth=%d, opacity=0.6),"
-            % (max(6, spatial[0] - int(spatial[0] * 0.22)), max(6, spatial[0] - int(spatial[0] * 0.22)))
-        )
-
-        for idx in range(2, stage_count + 1):
-            c = channels[idx - 1]
-            s = spatial[idx - 1]
-            w = widths[idx - 1]
-            enc_lines.append(
-                "    *block_2ConvPool(name='b%d', botton='pool_b%d', top='pool_b%d', s_filer=%d, n_filer=%d, offset='(1,0,0)', size=(%d,%d,%.1f), opacity=0.6),"
-                % (idx, idx - 1, idx, max(64, s * 8), c, s, s, w)
-            )
-
-        bottom_id = f"pool_b{stage_count}"
-        enc_last = f"ccr_b{stage_count}"
-        enc_lines.append(
-            "    to_ConvConvRelu(name='ccr_bn', s_filer=%d, n_filer=(%d,%d), offset='(2,0,0)', to='(%s-east)', width=(%.1f,%.1f), height=%d, depth=%d, caption='Bottleneck Conv'),"
-            % (max(32, bottleneck_size * 4), bottleneck_filters, bottleneck_filters, bottom_id, bottleneck_width, bottleneck_width, bottleneck_size, bottleneck_size)
-        )
-        enc_lines.append("    to_connection('%s', 'ccr_bn')," % bottom_id)
-
-        # Decoder path mirrors encoder with stage-aware unconv blocks.
-        prev_top = "ccr_bn"
-        un_idx = stage_count + 1
-        for stage in range(stage_count, 0, -1):
-            c = channels[stage - 1]
-            s = spatial[stage - 1]
-            w = widths[stage - 1]
-            name = f"b{un_idx}"
-            top = f"end_{name}"
-            dec_lines.append(
-                "    *block_Unconv(name='%s', botton='%s', top='%s', s_filer=%d, n_filer=%d, offset='(2.1,0,0)', size=(%d,%d,%.1f), opacity=0.6),"
-                % (name, prev_top, top, max(64, s * 8), c, s, s, max(2.5, w - 0.3))
-            )
-            skip_lines.append(
-                "    to_skip(of='ccr_b%d', to='ccr_res_%s', pos=1.25),"
-                % (stage, name)
-            )
-            prev_top = top
-            un_idx += 1
-
-        softmax_h = spatial[0]
-        dec_lines.append(
-            "    to_ConvSoftMax(name='soft1', s_filer=%d, offset='(0.75,0,0)', to='(%s-east)', width=1, height=%d, depth=%d, caption='SOFTMAX'),"
-            % (max(64, softmax_h * 8), prev_top, softmax_h, softmax_h)
-        )
-        dec_lines.append("    to_connection('%s', 'soft1')," % prev_top)
-
-        body = "\n".join(enc_lines + dec_lines + skip_lines)
+            % (channels[0], channels[0], sizes_hwd[0][2], sizes_hwd[0][2], sizes_hwd[0][0], sizes_hwd[0][1]),
+            "    to_Pool(name='pool_b1', offset='(0,0,0)', to='(ccr_b1-east)', width=1, height=%d, depth=%d, opacity=0.5),"
+            % (pooled_hw[0], pooled_hw[0]),
+            "    *block_2ConvPool(name='b2', botton='pool_b1', top='pool_b2', s_filer=256, n_filer=%d, offset='(1,0,0)', size=(%d,%d,%.1f), opacity=0.5),"
+            % (channels[1], sizes_hwd[1][0], sizes_hwd[1][1], sizes_hwd[1][2]),
+            "    *block_2ConvPool(name='b3', botton='pool_b2', top='pool_b3', s_filer=128, n_filer=%d, offset='(1,0,0)', size=(%d,%d,%.1f), opacity=0.5),"
+            % (channels[2], sizes_hwd[2][0], sizes_hwd[2][1], sizes_hwd[2][2]),
+            "    *block_2ConvPool(name='b4', botton='pool_b3', top='pool_b4', s_filer=64, n_filer=%d, offset='(1,0,0)', size=(%d,%d,%.1f), opacity=0.5),"
+            % (channels[3], sizes_hwd[3][0], sizes_hwd[3][1], sizes_hwd[3][2]),
+            "    to_ConvConvRelu(name='ccr_b5', s_filer=32, n_filer=(%d,%d), offset='(2,0,0)', to='(pool_b4-east)', width=(8,8), height=8, depth=8, caption='Bottleneck'),"
+            % (bottleneck_filters, bottleneck_filters),
+            "    to_connection('pool_b4', 'ccr_b5'),",
+            "    *block_Unconv(name='b6', botton='ccr_b5', top='end_b6', s_filer=64, n_filer=%d, offset='(2.1,0,0)', size=(16,16,5.0), opacity=0.5),"
+            % (channels[3]),
+            "    to_skip(of='ccr_b4', to='ccr_res_b6', pos=1.25),",
+            "    *block_Unconv(name='b7', botton='end_b6', top='end_b7', s_filer=128, n_filer=%d, offset='(2.1,0,0)', size=(25,25,4.5), opacity=0.5),"
+            % (channels[2]),
+            "    to_skip(of='ccr_b3', to='ccr_res_b7', pos=1.25),",
+            "    *block_Unconv(name='b8', botton='end_b7', top='end_b8', s_filer=256, n_filer=%d, offset='(2.1,0,0)', size=(32,32,3.5), opacity=0.5),"
+            % (channels[1]),
+            "    to_skip(of='ccr_b2', to='ccr_res_b8', pos=1.25),",
+            "    *block_Unconv(name='b9', botton='end_b8', top='end_b9', s_filer=512, n_filer=%d, offset='(2.1,0,0)', size=(40,40,2.5), opacity=0.5),"
+            % (channels[0]),
+            "    to_skip(of='ccr_b1', to='ccr_res_b9', pos=1.25),",
+            "    to_ConvSoftMax(name='soft1', s_filer=512, offset='(0.75,0,0)', to='(end_b9-east)', width=1, height=40, depth=40, caption='%s'),"
+            % output_caption,
+            "    to_connection('end_b9', 'soft1'),",
+        ])
         return (
             "import sys\n"
             "from pathlib import Path\n"

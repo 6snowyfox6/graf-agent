@@ -257,8 +257,9 @@ def ask_llm(
     model: str,
     system_prompt: str,
     user_prompt: str,
-    timeout: tuple[int, int] = (30, 300),
+    timeout: tuple[int, int] | None = None,
     temperature: float = 0.15,
+    max_tokens: int | None = 1024,
     response_format: dict[str, Any] | None = None,
 ) -> str:
     endpoint = _get_endpoint(model)
@@ -270,10 +271,21 @@ def ask_llm(
         ],
         "temperature": temperature,
     }
+    if max_tokens is not None:
+        payload["max_tokens"] = max_tokens
     if response_format is not None:
         payload["response_format"] = response_format
 
-    response = requests.post(endpoint, json=payload, timeout=timeout)
+    try:
+        response = requests.post(endpoint, json=payload, timeout=timeout)
+    except requests.exceptions.ReadTimeout:
+        # Fallback for long-running local generator on port 8000:
+        # try critic endpoint once to avoid full pipeline failure.
+        if model == GENERATOR_MODEL and endpoint != GEMMA_URL:
+            print("[WARN] generator timeout on primary endpoint, retrying via fallback endpoint 8001")
+            response = requests.post(GEMMA_URL, json=payload, timeout=timeout)
+        else:
+            raise
     if response.status_code >= 400:
         print(f"[LLM ERROR] {response.status_code}: {response.text}")
     response.raise_for_status()
@@ -1073,7 +1085,39 @@ def render_diagram(
     )
 
 
+def _is_error_draft(diagram: dict) -> bool:
+    title = str(diagram.get("title", "")).lower()
+    if "ошибка генерации" in title:
+        return True
+    nodes = diagram.get("nodes", []) or []
+    edges = diagram.get("edges", []) or []
+    if len(nodes) == 1 and len(edges) == 0:
+        node0 = nodes[0] if isinstance(nodes[0], dict) else {}
+        if str(node0.get("id", "")).lower() == "error":
+            return True
+    return False
+
+
+def _build_critique_fallback(reason: str) -> dict:
+    return {
+        "score": 0.0,
+        "task_fit_score": 0.0,
+        "visual_score": 0.0,
+        "missing_requirements": [],
+        "wrong_interpretations": [],
+        "extra_elements": [],
+        "visual_problems": ["Критика недоступна (таймаут/ошибка LLM)."],
+        "problems": [reason],
+        "fixes": ["Использовать черновую схему без изменений и повторить запуск позже."],
+    }
+
+
 def critique_diagram(user_task: str, draft_json: dict, references: list[dict] | None = None) -> dict:
+    if _is_error_draft(draft_json):
+        return _build_critique_fallback(
+            "Пропущен вызов критика: черновик уже аварийный (Ошибка генерации JSON)."
+        )
+
     references = normalize_references(references or [])
     refs_text = format_references_for_prompt(references)
 
@@ -1139,13 +1183,17 @@ def critique_diagram(user_task: str, draft_json: dict, references: list[dict] | 
   "fixes": ["string"]
 }}
 """
-    raw_answer = ask_llm(
-        CRITIC_MODEL,
-        system_prompt,
-        user_prompt,
-        temperature=0.05,
-        response_format={"type": "json_object"},
-    )
+    try:
+        raw_answer = ask_llm(
+            CRITIC_MODEL,
+            system_prompt,
+            user_prompt,
+            temperature=0.05,
+            response_format={"type": "json_object"},
+        )
+    except requests.exceptions.RequestException as req_err:
+        print(f"[WARN] critique request failed: {req_err}")
+        return _build_critique_fallback(f"critique request failed: {req_err}")
     try:
         return extract_json(raw_answer)
     except Exception as e:
@@ -1443,6 +1491,8 @@ def improve_diagram(
         "Ты исправляешь JSON диаграммы по patch plan. "
         "Ты не споришь с patch plan и не игнорируешь пункты must_fix. "
         "Сначала исправь все must_fix, потом optional. "
+        "Верни ПОЛНЫЙ diagram, а не частичный. "
+        "diagram обязательно должен содержать title, layout_hint, renderer, nodes, edges. "
         "Главное правило: сохраняй совместимость с внутренним форматом проекта. "
         "Нельзя придумывать новые поля внутри diagram и новые значения перечислений. "
         "Для general-диаграмм допустимые значения nodes[].kind: input, conv, block, output. "
@@ -1473,7 +1523,22 @@ Patch plan:
   "diagram": {{
     "title": "string",
     "layout_hint": "string",
-    "renderer": "string"
+    "renderer": "string",
+    "layout": "linear|u_shape",
+    "nodes": [
+      {{
+        "id": "string",
+        "label": "string",
+        "kind": "input|conv|pool|block|fc|sum|concat|mul|output"
+      }}
+    ],
+    "edges": [
+      {{
+        "source": "string",
+        "target": "string",
+        "label": "string"
+      }}
+    ]
   }},
   "addressed_critique": [
     {{
@@ -1485,13 +1550,17 @@ Patch plan:
 }}
 """
 
-    raw_answer = ask_llm(
-        GENERATOR_MODEL,
-        system_prompt,
-        user_prompt,
-        temperature=0.0,
-        response_format={"type": "json_object"},
-    )
+    try:
+        raw_answer = ask_llm(
+            GENERATOR_MODEL,
+            system_prompt,
+            user_prompt,
+            temperature=0.0,
+            response_format={"type": "json_object"},
+        )
+    except requests.exceptions.RequestException as req_err:
+        print(f"[WARN] improve request failed: {req_err}")
+        return draft_json, {"addressed_critique": [], "status": "llm_request_failed"}
 
     print("\n=== RAW ANSWER FROM IMPROVER ===")
     print(raw_answer)
@@ -1535,6 +1604,15 @@ Patch plan:
     }
 
     improved = payload.get("diagram", payload)
+    # Some models put nodes/edges at top-level while keeping diagram header partial.
+    # Merge them back to avoid false rollbacks.
+    if isinstance(improved, dict) and isinstance(payload, dict):
+        if not improved.get("nodes") and isinstance(payload.get("nodes"), list):
+            improved["nodes"] = payload.get("nodes", [])
+        if not improved.get("edges") and isinstance(payload.get("edges"), list):
+            improved["edges"] = payload.get("edges", [])
+        if "layout" not in improved and "layout" in payload:
+            improved["layout"] = payload.get("layout")
     improved = clean_diagram_labels(improved)
     improved = restore_node_kinds(draft_json, improved)
 
@@ -1716,7 +1794,7 @@ def analyze_reference_image(image_path: str) -> dict:
         "temperature": 0.2,
     }
 
-    response = requests.post(_get_endpoint(VISION_MODEL), json=payload, timeout=(30, 180))
+    response = requests.post(_get_endpoint(VISION_MODEL), json=payload, timeout=None)
     print("STATUS:", response.status_code)
     print("RESPONSE TEXT:")
     print(response.text)
@@ -1761,6 +1839,28 @@ def _hybrid_coverage(candidate: dict[str, Any]) -> tuple[float, list[str]]:
     return score, missing
 
 
+def _detect_render_contract(user_task: str, diagram: dict[str, Any], layout_hint: str) -> str:
+    if layout_hint != "model_architecture":
+        return ""
+
+    text = str(user_task).lower()
+    title = str(diagram.get("title", "")).lower()
+    corpus = [text, title]
+    for node in diagram.get("nodes", []):
+        if isinstance(node, dict):
+            corpus.append(str(node.get("id", "")).lower())
+            corpus.append(str(node.get("label", "")).lower())
+    joined = " ".join(corpus)
+
+    if any(token in joined for token in ["u-net", "unet", "юнет"]):
+        return "canonical_unet"
+    if "resnet" in joined or "реснет" in joined:
+        return "canonical_resnet"
+    if "yolo" in joined:
+        return "canonical_yolo"
+    return ""
+
+
 def generate_diagram(user_task: str, reference_description: dict | str | None = None) -> dict:
     configs = DIAGRAM_CONFIGS or load_diagram_types()
     mode = detect_diagram_mode(user_task, configs)
@@ -1774,6 +1874,9 @@ def generate_diagram(user_task: str, reference_description: dict | str | None = 
 
     references = merge_reference_sources(mode, reference_description)
     reference_text = format_references_for_prompt(references)
+    # Keep generator request compact to avoid slow responses/timeouts.
+    reference_text = reference_text[:1600]
+    user_task_compact = str(user_task)[:3200]
 
     custom_format = config.get("json_format", "")
     if custom_format:
@@ -1806,7 +1909,7 @@ def generate_diagram(user_task: str, reference_description: dict | str | None = 
 {reference_text}
 
 Запрос пользователя:
-{user_task}
+{user_task_compact}
 
 Дополнительные требования:
 {extra_rules}
@@ -1835,9 +1938,28 @@ def generate_diagram(user_task: str, reference_description: dict | str | None = 
             "- Если нет хотя бы одной части, ответ считается невалидным.\n"
         )
 
-    for attempt in range(3):
-        raw_answer = ask_llm(GENERATOR_MODEL, system_prompt,
-                             user_prompt, temperature=0.12)
+    max_attempts = 1 if layout_hint == "model_architecture" else 3
+    for attempt in range(max_attempts):
+        try:
+            raw_answer = ask_llm(
+                GENERATOR_MODEL,
+                system_prompt,
+                user_prompt,
+                temperature=0.12,
+                max_tokens=1100,
+                response_format={"type": "json_object"},
+            )
+        except requests.exceptions.ReadTimeout:
+            print(f"[WARN] generator timeout on attempt #{attempt + 1}")
+            # If we already have at least one valid candidate, stop retries and keep it.
+            if best_candidate is not None:
+                break
+            continue
+        except requests.exceptions.RequestException as e:
+            print(f"[WARN] generator request failed on attempt #{attempt + 1}: {e}")
+            if best_candidate is not None:
+                break
+            continue
 
         print(f"\n=== RAW ANSWER FROM GENERATOR #{attempt + 1} ===")
         print(raw_answer)
@@ -1847,6 +1969,10 @@ def generate_diagram(user_task: str, reference_description: dict | str | None = 
             candidate = extract_json(raw_answer)
             candidate.setdefault("renderer", config.get("renderer", "general"))
             candidate.setdefault("layout_hint", layout_hint)
+            if layout_hint == "model_architecture":
+                contract = _detect_render_contract(user_task, candidate, layout_hint)
+                if contract:
+                    candidate.setdefault("render_contract", contract)
 
             if layout_hint == "general":
                 candidate = normalize_general_diagram(candidate)
@@ -1895,60 +2021,57 @@ def main(
     critic_ab_replay: bool = False,
 ):
 
-    default_prompt = """Нарисуй 3D архитектурную диаграмму гибридной модели “ResNet18 + Qwen 3.5 + ANFIS” в стиле PlotNeuralNet.
+    default_prompt = """Нарисуй 3D архитектурную диаграмму Canonical U-Net для сегментации медицинских изображений в стиле PlotNeuralNet.
 
-Цель:
-Показать полный инференс-пайплайн мультимодальной гибридной системы, где:
-1) ResNet-18 извлекает визуальные признаки из изображения,
-2) Qwen 3.5 извлекает семантические/текстовые признаки,
-3) ANFIS объединяет признаки и выполняет интерпретируемое нечеткое принятие решения.
-
-Требования к структуре:
+Жесткие требования:
 - renderer: plotneuralnet
 - layout_hint: model_architecture
-- title: "Гибридная модель ResNet18 + Qwen 3.5 + ANFIS"
-- layout: linear
+- layout: u_shape
+- title: "Canonical U-Net"
 
-Обязательные блоки (слева направо):
-1. "Изображение (224x224x3)" [kind=input]
-2. "ResNet-18 Backbone" [kind=conv]
-3. "Global Avg Pool" [kind=pool]
-4. "Визуальный эмбеддинг (512)" [kind=block]
+Обязательные блоки энкодера (слева, сверху вниз):
+1) Input Image (572x572x1) [kind=input]
+2) Enc1 (Conv 64 x2) [kind=conv]
+3) Pool1 [kind=pool]
+4) Enc2 (Conv 128 x2) [kind=conv]
+5) Pool2 [kind=pool]
+6) Enc3 (Conv 256 x2) [kind=conv]
+7) Pool3 [kind=pool]
+8) Enc4 (Conv 512 x2) [kind=conv]
+9) Pool4 [kind=pool]
 
-Параллельная текстовая ветка:
-5. "Текстовый запрос / контекст" [kind=input]
-6. "Qwen 3.5 Encoder" [kind=block]
-7. "Текстовый эмбеддинг" [kind=block]
+Bottleneck:
+10) Bottleneck (Conv 1024 x2) [kind=block]
 
-Слияние и интерпретация:
-8. "Fusion (Concat/Projection)" [kind=concat]
-9. "ANFIS: Фаззификация" [kind=block]
-10. "ANFIS: База правил (IF-THEN)" [kind=block]
-11. "ANFIS: Дефаззификация" [kind=block]
-12. "Предсказание / класс" [kind=output]
-
-Интерпретируемые выходы (обязательно):
-13. "Важность признаков" [kind=output]
-14. "Активированные правила ANFIS" [kind=output]
-15. "Уверенность решения" [kind=output]
+Обязательные блоки декодера (справа, снизу вверх):
+11) Up4 (UpConv 512) [kind=conv]
+12) Concat4 (skip Enc4 + Up4) [kind=concat]
+13) Dec4 (Conv 512 x2) [kind=conv]
+14) Up3 (UpConv 256) [kind=conv]
+15) Concat3 (skip Enc3 + Up3) [kind=concat]
+16) Dec3 (Conv 256 x2) [kind=conv]
+17) Up2 (UpConv 128) [kind=conv]
+18) Concat2 (skip Enc2 + Up2) [kind=concat]
+19) Dec2 (Conv 128 x2) [kind=conv]
+20) Up1 (UpConv 64) [kind=conv]
+21) Concat1 (skip Enc1 + Up1) [kind=concat]
+22) Dec1 (Conv 64 x2) [kind=conv]
+23) Segmentation Map (572x572x1) [kind=output]
 
 Обязательные связи:
-- Изображение -> ResNet-18 -> GAP -> Визуальный эмбеддинг -> Fusion
-- Текстовый запрос -> Qwen 3.5 Encoder -> Текстовый эмбеддинг -> Fusion
-- Fusion -> ANFIS: Фаззификация -> ANFIS: База правил -> ANFIS: Дефаззификация -> Предсказание
-- ANFIS: База правил -> Активированные правила ANFIS
-- Fusion -> Важность признаков
-- ANFIS: Дефаззификация -> Уверенность решения
+- Прямая цепочка через все уровни энкодер -> bottleneck -> декодер -> output.
+- Skip connections: Enc4->Concat4, Enc3->Concat3, Enc2->Concat2, Enc1->Concat1.
+- Concat узлы должны получать два входа: от up-блока и от соответствующего encoder-блока.
 
 Визуальные требования:
-- Цвета веток разные: визуальная ветка (сине-голубая), текстовая (фиолетовая), ANFIS (оранжево-золотая), выходы (розово-красные).
-- Подписи читаемые, без наложений.
-- Стрелки не должны проходить через текст.
-- Расстояния между блоками умеренные и одинаковые.
-- Не упрощай до абстрактных 2-3 блоков; структура должна быть детальной и правдоподобной.
+- U-образная геометрия без наложения текста на блоки.
+- Skip-стрелки аккуратные, не пересекают подписи.
+- Короткие читаемые подписи.
+- Декодер симметричен энкодеру по уровням каналов 64/128/256/512.
+- Никаких 2D flowchart-элементов, только 3D PlotNeuralNet блоки.
 
-Формат ответа:
-Верни только валидный JSON-объект диаграммы, без markdown и без пояснений.
+Верни только валидный JSON диаграммы без markdown и пояснений.
+
 
 """
     user_task = load_user_prompt(default_prompt, prefer_test_prompt=use_test_prompt)
@@ -1964,6 +2087,7 @@ def main(
     print("=== ШАГ 1: Генерация черновика ===")
     draft = generate_diagram(user_task, references)
     print(json.dumps(draft, ensure_ascii=False, indent=2))
+    draft_is_error = _is_error_draft(draft)
 
     print("\n=== ШАГ 2: Критика ===")
     critique = critique_diagram(user_task, draft, references)
@@ -1977,13 +2101,18 @@ def main(
     save_json_artifact("patch_plan.json", patch_plan, base_dir=run_dir)
 
     print("\n=== ШАГ 3: Исправление ===")
-    final, improve_meta = improve_diagram(
-        user_task,
-        draft,
-        critique,
-        references,
-        patch_plan=patch_plan,
-    )
+    if draft_is_error:
+        print("[WARN] Пропускаю improve: черновик аварийный, сохраняю как final.")
+        final = draft
+        improve_meta = {"addressed_critique": [], "status": "skipped_error_draft"}
+    else:
+        final, improve_meta = improve_diagram(
+            user_task,
+            draft,
+            critique,
+            references,
+            patch_plan=patch_plan,
+        )
     print(json.dumps(final, ensure_ascii=False, indent=2))
     save_json_artifact("improve_meta.json", improve_meta, base_dir=run_dir)
 
@@ -1991,41 +2120,50 @@ def main(
         print("[WARN] final diagram is empty after improve; rollback to draft before verify")
         final = draft
 
-    verify = verify_critique_application(user_task, draft, patch_plan, final)
-    save_json_artifact("verify.json", verify, base_dir=run_dir)
+    if draft_is_error:
+        verify = {
+            "items": [],
+            "summary": {"fixed": 0, "partial": 0, "ignored": 0},
+            "invalid_final": True,
+            "reason": "verify skipped: draft is error fallback",
+        }
+        save_json_artifact("verify.json", verify, base_dir=run_dir)
+    else:
+        verify = verify_critique_application(user_task, draft, patch_plan, final)
+        save_json_artifact("verify.json", verify, base_dir=run_dir)
 
-    if (
-        not verify.get("invalid_final", False)
-        and (
-            verify.get("summary", {}).get("ignored", 0) > 0
-            or verify.get("summary", {}).get("partial", 0) > 0
-        )
-    ):
-        print("\n=== ШАГ 3.5: Дополнительный improve-pass по проигнорированным пунктам ===")
-        followup_patch_plan = build_followup_patch_plan(patch_plan, verify)
-        save_json_artifact("followup_patch_plan.json", followup_patch_plan, base_dir=run_dir)
-
-        if followup_patch_plan.get("must_fix"):
-            final_retry, improve_meta_retry = improve_diagram(
-                user_task,
-                final,
-                critique,
-                references,
-                patch_plan=followup_patch_plan,
+        if (
+            not verify.get("invalid_final", False)
+            and (
+                verify.get("summary", {}).get("ignored", 0) > 0
+                or verify.get("summary", {}).get("partial", 0) > 0
             )
-            verify_retry = verify_critique_application(user_task, draft, patch_plan, final_retry)
+        ):
+            print("\n=== ШАГ 3.5: Дополнительный improve-pass по проигнорированным пунктам ===")
+            followup_patch_plan = build_followup_patch_plan(patch_plan, verify)
+            save_json_artifact("followup_patch_plan.json", followup_patch_plan, base_dir=run_dir)
 
-            save_json_artifact("improve_meta_retry.json", improve_meta_retry, base_dir=run_dir)
-            save_json_artifact("verify_retry.json", verify_retry, base_dir=run_dir)
+            if followup_patch_plan.get("must_fix"):
+                final_retry, improve_meta_retry = improve_diagram(
+                    user_task,
+                    final,
+                    critique,
+                    references,
+                    patch_plan=followup_patch_plan,
+                )
+                verify_retry = verify_critique_application(user_task, draft, patch_plan, final_retry)
 
-            old_fixed = verify.get("summary", {}).get("fixed", 0)
-            new_fixed = verify_retry.get("summary", {}).get("fixed", 0)
-            old_ignored = verify.get("summary", {}).get("ignored", 0)
-            new_ignored = verify_retry.get("summary", {}).get("ignored", 0)
+                save_json_artifact("improve_meta_retry.json", improve_meta_retry, base_dir=run_dir)
+                save_json_artifact("verify_retry.json", verify_retry, base_dir=run_dir)
 
-            if (new_fixed > old_fixed) or (new_ignored < old_ignored):
-                final = final_retry
-                verify = verify_retry
+                old_fixed = verify.get("summary", {}).get("fixed", 0)
+                new_fixed = verify_retry.get("summary", {}).get("fixed", 0)
+                old_ignored = verify.get("summary", {}).get("ignored", 0)
+                new_ignored = verify_retry.get("summary", {}).get("ignored", 0)
+
+                if (new_fixed > old_fixed) or (new_ignored < old_ignored):
+                    final = final_retry
+                    verify = verify_retry
 
     final_clean = clean_diagram_labels(final)
     save_json_artifact("draft.json", draft, base_dir=run_dir)

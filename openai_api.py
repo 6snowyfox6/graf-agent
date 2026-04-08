@@ -214,7 +214,7 @@ def chat_completions(req: ChatCompletionRequest):
             env=env,
             capture_output=True,
             text=True,
-            timeout=3600,
+            timeout=None,
         )
     except subprocess.TimeoutExpired as e:
         raise HTTPException(
