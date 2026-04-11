@@ -134,21 +134,6 @@ body[data-theme="light"] {
     color-scheme: light;
 }
 
-html,
-body {
-    min-width: 1360px;
-    background: linear-gradient(180deg, var(--bg-2) 0%, var(--bg) 100%) !important;
-    overflow-x: auto;
-}
-
-body::before {
-    content: "";
-    position: fixed;
-    inset: 0;
-    background: linear-gradient(180deg, var(--bg-2) 0%, var(--bg) 100%);
-    z-index: -2;
-}
-
 .gradio-container {
     --background-fill-primary: transparent !important;
     --background-fill-secondary: transparent !important;

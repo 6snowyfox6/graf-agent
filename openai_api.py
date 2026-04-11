@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import threading
 import time
 import uuid
 from pathlib import Path
@@ -16,6 +17,14 @@ from pydantic import BaseModel, Field
 REPO_ROOT = Path(__file__).resolve().parent
 RUNS_ROOT = REPO_ROOT / "api_runs"
 RUNS_ROOT.mkdir(parents=True, exist_ok=True)
+
+from config import (  # noqa: E402
+    MAX_PROMPT_CHARS,
+    PIPELINE_TIMEOUT_SEC,
+    MAX_CONCURRENT_RUNS,
+)
+
+_run_semaphore = threading.Semaphore(MAX_CONCURRENT_RUNS)
 
 APP_MODELS = [
     "graf-agent-auto",
@@ -192,40 +201,53 @@ def chat_completions(req: ChatCompletionRequest):
         raise HTTPException(status_code=400, detail="messages must not be empty")
 
     prompt = build_prompt(req.messages, model_name)
+    if len(prompt) > MAX_PROMPT_CHARS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Prompt too long ({len(prompt)} chars). Max allowed: {MAX_PROMPT_CHARS}.",
+        )
+
+    acquired = _run_semaphore.acquire(blocking=False)
+    if not acquired:
+        raise HTTPException(
+            status_code=429,
+            detail=f"Too many concurrent requests. Max {MAX_CONCURRENT_RUNS} pipelines at a time.",
+        )
+
     request_id = uuid.uuid4().hex[:12]
     workdir = RUNS_ROOT / request_id
     workdir.mkdir(parents=True, exist_ok=True)
 
-    (workdir / "_test_prompt.txt").write_text(prompt, encoding="utf-8")
-
-    env = os.environ.copy()
-    old_pythonpath = env.get("PYTHONPATH", "")
-    env["PYTHONPATH"] = str(REPO_ROOT) + (os.pathsep + old_pythonpath if old_pythonpath else "")
-
-    # Если хочешь всегда использовать уже поднятые серверы моделей,
-    # можешь раскомментировать и адаптировать флаги ниже:
-    # cmd = ["python3", str(REPO_ROOT / "main.py"), "--no-auto-servers", "--explain-critic-influence", "off"]
-    cmd = ["python3", str(REPO_ROOT / "main.py")]
-
     try:
-        proc = subprocess.run(
-            cmd,
-            cwd=str(workdir),
-            env=env,
-            capture_output=True,
-            text=True,
-            timeout=None,
-        )
-    except subprocess.TimeoutExpired as e:
-        raise HTTPException(
-            status_code=504,
-            detail={
-                "error": "graf-agent timed out",
-                "request_id": request_id,
-                "stdout_tail": (e.stdout or "")[-4000:],
-                "stderr_tail": (e.stderr or "")[-4000:],
-            },
-        )
+        (workdir / "_test_prompt.txt").write_text(prompt, encoding="utf-8")
+
+        env = os.environ.copy()
+        old_pythonpath = env.get("PYTHONPATH", "")
+        env["PYTHONPATH"] = str(REPO_ROOT) + (os.pathsep + old_pythonpath if old_pythonpath else "")
+
+        cmd = ["python3", str(REPO_ROOT / "main.py")]
+
+        try:
+            proc = subprocess.run(
+                cmd,
+                cwd=str(workdir),
+                env=env,
+                capture_output=True,
+                text=True,
+                timeout=PIPELINE_TIMEOUT_SEC,
+            )
+        except subprocess.TimeoutExpired as e:
+            raise HTTPException(
+                status_code=504,
+                detail={
+                    "error": f"graf-agent timed out after {PIPELINE_TIMEOUT_SEC}s",
+                    "request_id": request_id,
+                    "stdout_tail": (e.stdout or "")[-4000:],
+                    "stderr_tail": (e.stderr or "")[-4000:],
+                },
+            )
+    finally:
+        _run_semaphore.release()
 
     stdout_tail = (proc.stdout or "")[-4000:]
     stderr_tail = (proc.stderr or "")[-4000:]
