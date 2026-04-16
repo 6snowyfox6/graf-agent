@@ -50,6 +50,7 @@ def critique_diagram(
     user_task: str,
     draft_json: dict,
     references: list[dict] | None = None,
+    user_feedback: str | None = None,
 ) -> dict:
     if is_error_draft(draft_json):
         return build_critique_fallback(
@@ -104,7 +105,12 @@ def critique_diagram(
 
 Запрос пользователя:
 {user_task[:1200]}
+"""
 
+    if user_feedback and user_feedback.strip():
+        user_prompt += f"\nОтзыв/Пожелание пользователя (ОБЯЗАТЕЛЬНО УЧЕСТЬ):\n{user_feedback.strip()}\n"
+
+    user_prompt += f"""
 Черновая схема:
 {json.dumps(compact_draft, ensure_ascii=False, separators=(",", ":"))}
 

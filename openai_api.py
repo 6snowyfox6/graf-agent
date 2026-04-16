@@ -6,11 +6,13 @@ import subprocess
 import threading
 import time
 import uuid
+import io
+import zipfile
 from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -42,14 +44,39 @@ MODEL_PREFIXES = {
     "graf-agent-infographic": "infographic\n\nЭто infographic diagram.\nИспользуй инфографический режим.\n\n",
 }
 
+from contextlib import asynccontextmanager
+from server_manager import ServerManager
+
+server_manager_instance = None
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    global server_manager_instance
+    try:
+        server_manager_instance = ServerManager()
+        server_manager_instance.start_default_servers()
+        yield
+    finally:
+        if server_manager_instance:
+            server_manager_instance.stop_all()
+
 app = FastAPI(
     title="graf-agent OpenAI-compatible API",
     version="0.1.0",
     description="OpenAI-compatible wrapper for graf-agent",
+    lifespan=lifespan
+)
+
+from fastapi.middleware.cors import CORSMiddleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 app.mount("/artifacts", StaticFiles(directory=str(RUNS_ROOT)), name="artifacts")
-
 
 class ChatMessage(BaseModel):
     role: str
@@ -305,3 +332,142 @@ def chat_completions(req: ChatCompletionRequest):
             completion_tokens=completion_tokens,
         )
     )
+
+# --- Interactive Canvas API Routes ---
+
+from pipeline.generator import generate_diagram
+from pipeline.normalizer import normalize_general_diagram
+from pipeline.critic import critique_diagram, build_patch_plan
+from pipeline.improver import improve_diagram
+
+class GenerateRequest(BaseModel):
+    prompt: str
+
+@app.post("/api/generate")
+def api_generate(req: GenerateRequest):
+    try:
+        draft = generate_diagram(
+            user_task=req.prompt,
+            references=[],
+            normalize_general_diagram_fn=normalize_general_diagram
+        )
+        return {"status": "success", "graph": draft}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+class ImproveRequest(BaseModel):
+    prompt: str
+    graph: dict
+    user_feedback: str | None = None
+
+@app.post("/api/improve")
+def api_improve(req: ImproveRequest):
+    try:
+        from critic_influence import CriticAnalyzer
+        
+        run_id = f"run_{uuid.uuid4().hex[:8]}"
+        run_dir = RUNS_ROOT / "export_api" / run_id
+        
+        critique = critique_diagram(req.prompt, req.graph, references=[], user_feedback=req.user_feedback)
+        patch_plan = build_patch_plan(critique)
+        final, meta = improve_diagram(
+            req.prompt,
+            req.graph,
+            critique,
+            references=[],
+            patch_plan=patch_plan,
+            normalize_general_diagram_fn=normalize_general_diagram
+        )
+        
+        shap_urls = {}
+        try:
+            analyzer = CriticAnalyzer(output_root=str(RUNS_ROOT / "shap_history"))
+            influence = analyzer.analyze_and_save(
+                run_id=run_id,
+                run_dir=run_dir,
+                draft=req.graph,
+                critique=critique,
+                final=final,
+                verify=None
+            )
+            
+            if influence.local_contrib_plot and Path(influence.local_contrib_plot).exists():
+               shap_urls['bar'] = f"/artifacts/export_api/{run_id}/{Path(influence.local_contrib_plot).name}"
+            if influence.traceability_plot and Path(influence.traceability_plot).exists():
+               shap_urls['network'] = f"/artifacts/export_api/{run_id}/{Path(influence.traceability_plot).name}"
+        except Exception as e:
+            print(f"SHAP Error: {e}")
+
+        return {"status": "success", "graph": final, "critique": critique, "meta": meta, "shap": shap_urls}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/export")
+def api_export(req: dict):
+    try:
+        from renderers.graphviz_renderers import render_general_diagram
+        export_id = uuid.uuid4().hex[:8]
+        out_dir = RUNS_ROOT / f"export_{export_id}"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        
+        render_general_diagram(req, output_name="diagram", output_dir=str(out_dir))
+        
+        memory_file = io.BytesIO()
+        with zipfile.ZipFile(memory_file, 'w', zipfile.ZIP_DEFLATED) as zf:
+            for p in out_dir.iterdir():
+                if p.is_file():
+                    zf.write(p, arcname=p.name)
+        memory_file.seek(0)
+        return StreamingResponse(
+            memory_file, 
+            media_type="application/zip", 
+            headers={"Content-Disposition": f"attachment; filename=diagram_export_{export_id}.zip"}
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+class GeneratePNNRequest(BaseModel):
+    prompt: str
+
+@app.post("/api/generate_pnn")
+def api_generate_pnn(req: GeneratePNNRequest):
+    try:
+        from plotneuralnet_renderer import PlotNeuralNetRenderer
+        draft = generate_diagram(
+            user_task=req.prompt + " (plotneuralnet architecture)",
+            references=[],
+            normalize_general_diagram_fn=None
+        )
+        
+        critique = critique_diagram(req.prompt, draft, references=[])
+        patch_plan = build_patch_plan(critique)
+        final, meta = improve_diagram(
+            req.prompt,
+            draft,
+            critique,
+            references=[],
+            patch_plan=patch_plan,
+            normalize_general_diagram_fn=None
+        )
+
+        safe_hex = uuid.uuid4().hex[:8]
+        pnn_root = RUNS_ROOT / "export_pnn"
+        renderer = PlotNeuralNetRenderer(
+            project_root=str(REPO_ROOT),
+            output_root=str(pnn_root)
+        )
+        res = renderer.render(final, output_name=f"pnn_{safe_hex}")
+        
+        png_path = Path(res.get("preview_path", ""))
+        pdf_path = Path(res.get("pdf_path", ""))
+        
+        return {
+            "status": "success",
+            "png_url": f"/artifacts/export_pnn/pnn_{safe_hex}/{png_path.name}" if png_path.exists() else None,
+            "pdf_url": f"/artifacts/export_pnn/pnn_{safe_hex}/{pdf_path.name}" if pdf_path.exists() else None,
+            "graph": final
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
